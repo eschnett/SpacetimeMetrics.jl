@@ -261,27 +261,27 @@ end
 
 # Kerr-Newman metric in fully harmonic coordinates
 # (Cook, "Initial Data for Numerical Relativity", §3.3.2, eqs. 96–102.)
-export KerrHarmonic
-struct KerrHarmonic{T} <: AbstractMetric
+export Harmonic
+struct Harmonic{T} <: AbstractMetric
     mass::T                     # 0 < M
     spin::T                     # M² > a² + Q²
     charge::T                   # Q
-    KerrHarmonic{T}(mass::T, spin::T, charge::T) where {T} = new{T}(mass, spin, charge)
+    Harmonic{T}(mass::T, spin::T, charge::T) where {T} = new{T}(mass, spin, charge)
 end
-function KerrHarmonic{T}(mass, spin=zero(T), charge=zero(T)) where {T}
-    KerrHarmonic{T}(T(mass), T(spin), T(charge))
+function Harmonic{T}(mass, spin=zero(T), charge=zero(T)) where {T}
+    Harmonic{T}(T(mass), T(spin), T(charge))
 end
-function KerrHarmonic(mass, spin=0, charge=0)
+function Harmonic(mass, spin=0, charge=0)
     T = promote_type(typeof(mass), typeof(spin), typeof(charge))
-    KerrHarmonic{T}(mass, spin, charge)
+    Harmonic{T}(mass, spin, charge)
 end
 
-Base.nameof(kh::KerrHarmonic) = "Kerr-Newman metric in fully harmonic coordinates (M=$(kh.mass), a=$(kh.spin), Q=$(kh.charge))"
+Base.nameof(kh::Harmonic) = "Kerr-Newman metric in fully harmonic coordinates (M=$(kh.mass), a=$(kh.spin), Q=$(kh.charge))"
 
 # 4-metric in the spheroidal (t, r, θ, φ) chart used by Cook eqs. 96–102.
 # Built from the ADM lapse, shift and 3-metric as g_tt = -α² + γ_ij β^i β^j,
 # g_ti = γ_ij β^j, g_ij = γ_ij.
-function _kerr_harmonic_spheroidal_metric(kh::KerrHarmonic, p::AbstractVector)
+function _kerr_harmonic_spheroidal_metric(kh::Harmonic, p::AbstractVector)
     M = kh.mass
     a = kh.spin
     Q = kh.charge
@@ -325,7 +325,7 @@ function _kerr_harmonic_spheroidal_metric(kh::KerrHarmonic, p::AbstractVector)
     return g::SMatrix{4,4}
 end
 
-function metric(kh::KerrHarmonic, p::AbstractVector)
+function metric(kh::Harmonic, p::AbstractVector)
     M = kh.mass
     a = kh.spin
 
@@ -386,7 +386,7 @@ end
 
 # @compile_workload begin
 #     ks = KerrSchild(1.0, 0.3)
-#     kh = KerrHarmonic(1.0, 0.3)
+#     ha = Harmonic(1.0, 0.3)
 #     x = SVector(0.0, 3.0, 1.0, 0.5)
 #     metric(ks, x)
 #     dmetric(ks, x)
@@ -396,8 +396,8 @@ end
 #     RiemannTensor(ks, x)
 #     RicciTensor(ks, x)
 #     EinsteinTensor(ks, x)
-#     metric(kh, x)
-#     EinsteinTensor(kh, x)
+#     metric(ha, x)
+#     EinsteinTensor(ha, x)
 # end
 
 end

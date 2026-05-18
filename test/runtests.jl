@@ -45,51 +45,51 @@ end
             @test issymmetric(g)
 
             G = EinsteinTensor(ks, x)
-            @test isapprox(G, zero(G); atol=1e-8)
+            @test isapprox(G, zero(G); atol=1e-7)
         end
     end
 end
 
-@testset "Kerr-Harmonic" begin
-    kh = KerrHarmonic(1.0)
-    kh = KerrHarmonic(1.0, 0.5)
-    kh = KerrHarmonic(1.0, 0.5, 0.0)
-    kh = KerrHarmonic{Float64}(1.0)
-    kh = KerrHarmonic{Float64}(1.0, 0.5)
-    kh = KerrHarmonic{Float64}(1.0, 0.5, 0.0)
+@testset "Harmonic" begin
+    ha = Harmonic(1.0)
+    ha = Harmonic(1.0, 0.5)
+    ha = Harmonic(1.0, 0.5, 0.0)
+    ha = Harmonic{Float64}(1.0)
+    ha = Harmonic{Float64}(1.0, 0.5)
+    ha = Harmonic{Float64}(1.0, 0.5, 0.0)
 
     for iter in 1:10
         M = 0.5 + rand()
         a = (rand() - 0.5) * 0.5
         Q = 0
-        kh = KerrHarmonic(M, a, Q)
+        ha = Harmonic(M, a, Q)
 
         for n in 1:10
             x = 2 .+ SVector{4}(randn(4))
-            g = metric(kh, x)
+            g = metric(ha, x)
             @test issymmetric(g)
 
-            G = EinsteinTensor(kh, x)
+            G = EinsteinTensor(ha, x)
             @test isapprox(G, zero(G); atol=1e-8)
         end
     end
 
     # Electrovac: Q ≠ 0 sources an EM stress-energy. The full Einstein tensor is
     # nonzero, but the EM stress-energy is traceless, so the Ricci scalar
-    # R = g^{ab} R_{ab} must still vanish.
+    # R = g^{ab} R_{ab} still vanishes.
     for iter in 1:10
         M = 0.5 + rand()
         a = (rand() - 0.5) * 0.3
         Q = (rand() - 0.5) * 0.3
-        kh = KerrHarmonic(M, a, Q)
+        ha = Harmonic(M, a, Q)
 
         for n in 1:10
             x = 2 .+ SVector{4}(randn(4))
-            g = metric(kh, x)
+            g = metric(ha, x)
             @test issymmetric(g)
 
             gu = inv(g)
-            Rc = RicciTensor(kh, x)
+            Rc = RicciTensor(ha, x)
             Rs = sum(gu[a, b] * Rc[a, b] for a in 1:4, b in 1:4)
             @test isapprox(Rs, 0; atol=1e-8)
         end

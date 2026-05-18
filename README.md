@@ -8,13 +8,15 @@ Analytically known metrics for general relativity.
 
 Metrics:
 - Minkowski
-- Kerr-Schild (no charge yet)
-- Harmonic coordinates (not yet implemented)
+- Kerr-Schild (without charge)
+- Harmonic coordinates
 
 Transformations:
 - Translations
 - Rotations (yet to come)
 - Boosts (yet to come)
 
-Derivatives:
-- first and second derivatives
+Geometry:
+- first and second derivatives of the metric
+- Christoffel symbols
+- Riemmann tensor, Ricci tensor, Einstein tensor
