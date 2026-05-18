@@ -50,6 +50,52 @@ end
     end
 end
 
+@testset "Kerr-Harmonic" begin
+    kh = KerrHarmonic(1.0)
+    kh = KerrHarmonic(1.0, 0.5)
+    kh = KerrHarmonic(1.0, 0.5, 0.0)
+    kh = KerrHarmonic{Float64}(1.0)
+    kh = KerrHarmonic{Float64}(1.0, 0.5)
+    kh = KerrHarmonic{Float64}(1.0, 0.5, 0.0)
+
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        Q = 0
+        kh = KerrHarmonic(M, a, Q)
+
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            g = metric(kh, x)
+            @test issymmetric(g)
+
+            G = EinsteinTensor(kh, x)
+            @test isapprox(G, zero(G); atol=1e-8)
+        end
+    end
+
+    # Electrovac: Q ≠ 0 sources an EM stress-energy. The full Einstein tensor is
+    # nonzero, but the EM stress-energy is traceless, so the Ricci scalar
+    # R = g^{ab} R_{ab} must still vanish.
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.3
+        Q = (rand() - 0.5) * 0.3
+        kh = KerrHarmonic(M, a, Q)
+
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            g = metric(kh, x)
+            @test issymmetric(g)
+
+            gu = inv(g)
+            Rc = RicciTensor(kh, x)
+            Rs = sum(gu[a, b] * Rc[a, b] for a in 1:4, b in 1:4)
+            @test isapprox(Rs, 0; atol=1e-8)
+        end
+    end
+end
+
 @testset "Translations" begin
     ks = KerrSchild(1.0, 0.5)
 
@@ -79,13 +125,11 @@ end
         x = 2 .+ SVector{4}(randn(4))
 
         # Calculate metric and derivatives; test symmetries
-        g = metric(ks, x)
+        g, dg = dmetric(ks, x)
         @test all(g[a, b] == g[b, a] for a in 1:4, b in 1:4)
-
-        dg = dmetric(ks, x)
         @test all(dg[a, b, c] == dg[b, a, c] for a in 1:4, b in 1:4, c in 1:4)
 
-        ddg = ddmetric(ks, x)
+        _, _, ddg = ddmetric(ks, x)
         @test all(ddg[a, b, c, d] == ddg[b, a, c, d] for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
         @test all(ddg[a, b, c, d] == ddg[a, b, d, c] for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 

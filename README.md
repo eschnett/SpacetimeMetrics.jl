@@ -2,6 +2,10 @@
 
 Analytically known metrics for general relativity.
 
+[![CI](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/CI.yml)
+
+## Overview
+
 Metrics:
 - Minkowski
 - Kerr-Schild (no charge yet)

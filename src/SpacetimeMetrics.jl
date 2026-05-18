@@ -2,6 +2,7 @@ module SpacetimeMetrics
 
 using ForwardDiff
 using LinearAlgebra
+using PrecompileTools
 using StaticArrays
 
 export AbstractMetric
@@ -25,6 +26,8 @@ const η = SMatrix{4,4}(-1, 0, 0, 0, 0, +1, 0, 0, 0, 0, +1, 0, 0, 0, 0, +1)
 
 ################################################################################
 
+# Derivatives
+
 # Tags for non-allocating AD passes — one per differentiation level
 struct _DMetricTag end
 struct _DDMetricTag end
@@ -32,7 +35,7 @@ struct _DChristoffelTag end
 
 # Seed an SVector{4} with 4-component dual numbers (one partial per coordinate).
 # When T is itself a Dual (nested call), one(T)/zero(T) produce the right typed values.
-@inline function _dual_seed(p::SVector{4,T}, ::Type{Tag}) where {T,Tag}
+@inline function make_dual(p::SVector{4,T}, ::Type{Tag}) where {T,Tag}
     z, o = zero(T), one(T)
     SVector(
         ForwardDiff.Dual{Tag}(p[1], o, z, z, z),
@@ -42,38 +45,39 @@ struct _DChristoffelTag end
     )
 end
 
-# Derivatives
+################################################################################
+
+# Geometry
 
 export dmetric
 function dmetric(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
-    g_dual = metric(m, _dual_seed(p, _DMetricTag))
-    return SArray{Tuple{4,4,4}}(ForwardDiff.partials(g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
+    g_dual = metric(m, make_dual(p, _DMetricTag))
+    g = SMatrix{4,4}(ForwardDiff.value(g_dual[a, b]) for a in 1:4, b in 1:4)
+    dg = SArray{Tuple{4,4,4}}(ForwardDiff.partials(g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
+    return g, dg
 end
 
 export ddmetric
 function ddmetric(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
-    # _dual_seed produces Dual{_DDMetricTag, T, 4}; dmetric then seeds a second
-    # Dual{_DMetricTag, Dual{_DDMetricTag,T,4}, 4} layer — dual-of-dual, no closures.
-    dg_dual = dmetric(m, _dual_seed(p, _DDMetricTag))
+    # dmetric returns (g_dual, dg_dual) with Dual{_DDMetricTag,T,4} elements;
+    # inside dmetric a second Dual{_DMetricTag,...} layer is added — dual-of-dual.
+    g_dual, dg_dual = dmetric(m, make_dual(p, _DDMetricTag))
+    g = SMatrix{4,4}(ForwardDiff.value(g_dual[a, b]) for a in 1:4, b in 1:4)
+    dg = SArray{Tuple{4,4,4}}(ForwardDiff.partials(g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
     ddg = SArray{Tuple{4,4,4,4}}(ForwardDiff.partials(dg_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
     # Symmetrize to cancel round-off errors
     ddg = SArray{Tuple{4,4,4,4}}((ddg[a, b, c, d] + ddg[a, b, d, c]) / 2 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
-    return ddg::SArray{Tuple{4,4,4,4}}
+    return g, dg, ddg
 end
-
-################################################################################
-
-# Geometry
 
 export ChristoffelSymbols
 function ChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
-    g = metric(m, p)
+    g, dg = dmetric(m, p)
     gu = inv(g)
-    dg = dmetric(m, p)
 
     Γl = SArray{Tuple{4,4,4}}((dg[a, b, c] + dg[a, c, b] - dg[b, c, a]) / 2 for a in 1:4, b in 1:4, c in 1:4)
 
@@ -91,19 +95,19 @@ function dChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
     # ChristoffelSymbols calls dmetric internally, so this naturally composes to
     # dual-of-dual: _DChristoffelTag outer, _DMetricTag inner.
-    Γ_dual = ChristoffelSymbols(m, _dual_seed(p, _DChristoffelTag))
+    Γ_dual = ChristoffelSymbols(m, make_dual(p, _DChristoffelTag))
+    Γ = SArray{Tuple{4,4,4}}(ForwardDiff.value(Γ_dual[a, b, c]) for a in 1:4, b in 1:4, c in 1:4)
     dΓ = SArray{Tuple{4,4,4,4}}(ForwardDiff.partials(Γ_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
     # Symmetrize to cancel round-off errors
     dΓ = SArray{Tuple{4,4,4,4}}((dΓ[a, b, c, d] + dΓ[a, c, b, d]) / 2 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
-    return dΓ::SArray{Tuple{4,4,4,4}}
+    return Γ::SArray{Tuple{4,4,4}}, dΓ::SArray{Tuple{4,4,4,4}}
 end
 
 export RiemannTensor
 function RiemannTensor(m::AbstractMetric, p::AbstractVector)
-    Γ = ChristoffelSymbols(m, p)
-    dΓ = dChristoffelSymbols(m, p)
+    Γ, dΓ = dChristoffelSymbols(m, p)
 
     # R^a_bcd
     # TODO: Check the sign convention!
@@ -252,5 +256,148 @@ function metric(ks::KerrSchild, p::AbstractVector)
 
     return g::SMatrix{4,4}
 end
+
+################################################################################
+
+# Kerr-Newman metric in fully harmonic coordinates
+# (Cook, "Initial Data for Numerical Relativity", §3.3.2, eqs. 96–102.)
+export KerrHarmonic
+struct KerrHarmonic{T} <: AbstractMetric
+    mass::T                     # 0 < M
+    spin::T                     # M² > a² + Q²
+    charge::T                   # Q
+    KerrHarmonic{T}(mass::T, spin::T, charge::T) where {T} = new{T}(mass, spin, charge)
+end
+function KerrHarmonic{T}(mass, spin=zero(T), charge=zero(T)) where {T}
+    KerrHarmonic{T}(T(mass), T(spin), T(charge))
+end
+function KerrHarmonic(mass, spin=0, charge=0)
+    T = promote_type(typeof(mass), typeof(spin), typeof(charge))
+    KerrHarmonic{T}(mass, spin, charge)
+end
+
+Base.nameof(kh::KerrHarmonic) = "Kerr-Newman metric in fully harmonic coordinates (M=$(kh.mass), a=$(kh.spin), Q=$(kh.charge))"
+
+# 4-metric in the spheroidal (t, r, θ, φ) chart used by Cook eqs. 96–102.
+# Built from the ADM lapse, shift and 3-metric as g_tt = -α² + γ_ij β^i β^j,
+# g_ti = γ_ij β^j, g_ij = γ_ij.
+function _kerr_harmonic_spheroidal_metric(kh::KerrHarmonic, p::AbstractVector)
+    M = kh.mass
+    a = kh.spin
+    Q = kh.charge
+
+    @assert length(p) == 4
+    t, r, θ, φ = p
+    cos²θ = cos(θ)^2
+    sin²θ = sin(θ)^2
+
+    rt = sqrt(M^2 - a^2 - Q^2)
+    r₊ = M + rt
+    r₋ = M - rt
+
+    ρ² = r^2 + a^2 * cos²θ
+    Hh = (r + r₊) / (r - r₋)
+    Kh = 2M / (r - r₋)
+    Φ = (2M*r - Q^2) / ρ²
+
+    α⁻² = 1 + Φ * Hh + (r₊^2 + a^2) / ρ² * Kh
+    α² = inv(α⁻²)
+
+    βʳ = α² * (r₊^2 + a^2) / ρ²
+    βᶲ = -α² * (a / ρ²) * Kh
+
+    γ_rr = (2 - (1 - Φ) * Hh) * Hh
+    γ_rφ = -(1 + Φ * Hh) * a * sin²θ
+    γ_θθ = ρ²
+    γ_φφ = (r^2 + a^2 + Φ * a^2 * sin²θ) * sin²θ
+
+    g_tt = -α² + γ_rr * βʳ^2 + 2 * γ_rφ * βʳ * βᶲ + γ_φφ * βᶲ^2
+    g_tr = γ_rr * βʳ + γ_rφ * βᶲ
+    g_tφ = γ_rφ * βʳ + γ_φφ * βᶲ
+    o = zero(g_tt)
+
+    g = SMatrix{4,4}(
+        g_tt, g_tr, o,    g_tφ,
+        g_tr, γ_rr, o,    γ_rφ,
+        o,    o,    γ_θθ, o,
+        g_tφ, γ_rφ, o,    γ_φφ,
+    )
+    return g::SMatrix{4,4}
+end
+
+function metric(kh::KerrHarmonic, p::AbstractVector)
+    M = kh.mass
+    a = kh.spin
+
+    @assert length(p) == 4
+    t, x, y, z = p
+
+    # Solve the quartic R⁴ - R²(x² + y² + z² - a²) - a² z² = 0 for R² = (r-M)²
+    s = x^2 + y^2 + z^2 - a^2
+    R² = (s + sqrt(s^2 + 4 * a^2 * z^2)) / 2
+    R = sqrt(R²)
+    r = R + M
+
+    # Reconstruct spheroidal angles via atan2 of (sin, cos) extracted from the
+    # forward map. Differentiable and stable away from the z-axis / disk.
+    cos_θ = z / R
+    sin²θ = 1 - cos_θ^2
+    sin_θ = sqrt(sin²θ)
+    denom = (R² + a^2) * sin_θ
+    cos_φ = (R * x + a * y) / denom
+    sin_φ = (R * y - a * x) / denom
+    θ = atan(sin_θ, cos_θ)
+    φ = atan(sin_φ, cos_φ)
+
+    g_sph = _kerr_harmonic_spheroidal_metric(kh, SVector(t, r, θ, φ))
+
+    # Spatial Jacobian K[i, A] = ∂x^i / ∂X^A. With R = r - M, ∂R/∂r = 1.
+    Kspat = SMatrix{3,3}(
+        sin_θ * cos_φ,
+        sin_θ * sin_φ,
+        cos_θ,
+        R*cos_θ*cos_φ - a*cos_θ*sin_φ,
+        R*cos_θ*sin_φ + a*cos_θ*cos_φ,
+        -R*sin_θ,
+        -y,
+        x,
+        zero(x),
+    )
+    Jspat = inv(Kspat)          # Jspat[A, i] = ∂X^A / ∂x^i
+
+    T = eltype(Jspat)
+    o, ze = one(T), zero(T)
+    J = SMatrix{4,4,T}(
+        o,  ze,           ze,           ze,
+        ze, Jspat[1, 1],  Jspat[2, 1],  Jspat[3, 1],
+        ze, Jspat[1, 2],  Jspat[2, 2],  Jspat[3, 2],
+        ze, Jspat[1, 3],  Jspat[2, 3],  Jspat[3, 3],
+    )
+
+    g = J' * g_sph * J
+
+    # Symmetrize to cancel round-off errors
+    g = (g + g') / 2
+
+    return g::SMatrix{4,4}
+end
+
+################################################################################
+
+# @compile_workload begin
+#     ks = KerrSchild(1.0, 0.3)
+#     kh = KerrHarmonic(1.0, 0.3)
+#     x = SVector(0.0, 3.0, 1.0, 0.5)
+#     metric(ks, x)
+#     dmetric(ks, x)
+#     ddmetric(ks, x)
+#     ChristoffelSymbols(ks, x)
+#     dChristoffelSymbols(ks, x)
+#     RiemannTensor(ks, x)
+#     RicciTensor(ks, x)
+#     EinsteinTensor(ks, x)
+#     metric(kh, x)
+#     EinsteinTensor(kh, x)
+# end
 
 end
