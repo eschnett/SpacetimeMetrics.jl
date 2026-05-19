@@ -6,14 +6,28 @@ using PrecompileTools
 using StaticArrays
 
 export AbstractMetric
+"""
+    AbstractMetric
+
+Supertype for analytic 4-dimensional Lorentzian spacetime metrics.
+
+Conventions throughout the package:
+- spacetime has four dimensions,
+- metric signature is `(-1, +1, +1, +1)`,
+- geometric units, `c = G = 1`.
+
+Concrete subtypes must implement [`metric`](@ref) and `Base.nameof`.
+"""
 abstract type AbstractMetric end
 
-# Conventions:
-# - spacetime has four dimensions
-# - metric signature is (-1, +1, +1, +1)
-# - c = G = 1
-
 export metric
+"""
+    metric(m::AbstractMetric, x::AbstractVector) -> SMatrix{4,4}
+
+Return the covariant metric tensor `g_{ab}(x)` at the 4-position
+`x = (t, x, y, z)`. Must be implemented for every concrete subtype of
+[`AbstractMetric`](@ref).
+"""
 metric(::AbstractMetric, x::AbstractVector) = error("not implemented")
 
 Base.ndims(::AbstractMetric) = 4
@@ -50,6 +64,14 @@ end
 # Geometry
 
 export dmetric
+"""
+    dmetric(m::AbstractMetric, p::AbstractVector) -> (g, dg)
+
+Return the metric `g_{ab}` and its first coordinate derivative
+`dg[a, b, c] = ∂_c g_{ab}` at the 4-position `p`. Computed by forward-mode
+automatic differentiation through [`metric`](@ref) with a single dual-number
+seed; allocation-free and GPU-friendly.
+"""
 function dmetric(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
     g_dual = metric(m, make_dual(p, _DMetricTag))
@@ -59,6 +81,14 @@ function dmetric(m::AbstractMetric, p::AbstractVector)
 end
 
 export ddmetric
+"""
+    ddmetric(m::AbstractMetric, p::AbstractVector) -> (g, dg, ddg)
+
+Return the metric `g_{ab}`, its first derivative `dg[a, b, c] = ∂_c g_{ab}`,
+and its second derivative `ddg[a, b, c, d] = ∂_d ∂_c g_{ab}` at the 4-position
+`p`. The second-derivative pass nests an additional dual layer on top of
+[`dmetric`](@ref). The result is symmetrized over the trailing index pair.
+"""
 function ddmetric(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
     # dmetric returns (g_dual, dg_dual) with Dual{_DDMetricTag,T,4} elements;
@@ -75,6 +105,13 @@ function ddmetric(m::AbstractMetric, p::AbstractVector)
 end
 
 export ChristoffelSymbols
+"""
+    ChristoffelSymbols(m::AbstractMetric, p::AbstractVector) -> Γ
+
+Return the Christoffel symbols of the second kind
+`Γ[a, b, c] = Γ^a_{bc} = ½ g^{ad} (∂_b g_{dc} + ∂_c g_{db} − ∂_d g_{bc})`
+at the 4-position `p`. Symmetric in the lower pair `(b, c)`.
+"""
 function ChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     g, dg = dmetric(m, p)
     gu = inv(g)
@@ -91,6 +128,12 @@ function ChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
 end
 
 export dChristoffelSymbols
+"""
+    dChristoffelSymbols(m::AbstractMetric, p::AbstractVector) -> (Γ, dΓ)
+
+Return the Christoffel symbols `Γ[a, b, c] = Γ^a_{bc}` and their first
+coordinate derivative `dΓ[a, b, c, d] = ∂_d Γ^a_{bc}` at the 4-position `p`.
+"""
 function dChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
     # ChristoffelSymbols calls dmetric internally, so this naturally composes to
@@ -106,6 +149,14 @@ function dChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
 end
 
 export RiemannTensor
+"""
+    RiemannTensor(m::AbstractMetric, p::AbstractVector) -> R
+
+Return the Riemann curvature tensor (mixed form) at the 4-position `p`:
+`R[a, b, c, d] = R^a_{bcd} = ∂_c Γ^a_{db} − ∂_d Γ^a_{cb}
+                            + Γ^a_{ce} Γ^e_{db} − Γ^a_{de} Γ^e_{cb}`.
+Antisymmetric in the last pair `(c, d)`.
+"""
 function RiemannTensor(m::AbstractMetric, p::AbstractVector)
     Γ, dΓ = dChristoffelSymbols(m, p)
 
@@ -124,6 +175,12 @@ function RiemannTensor(m::AbstractMetric, p::AbstractVector)
 end
 
 export RicciTensor
+"""
+    RicciTensor(m::AbstractMetric, p::AbstractVector) -> Rc
+
+Return the Ricci tensor `Rc[a, b] = R_{ab} = R^c_{acb}` at the 4-position `p`,
+the trace of the Riemann tensor over the first and third indices. Symmetric.
+"""
 function RicciTensor(m::AbstractMetric, p::AbstractVector)
     Rm = RiemannTensor(m, p)
 
@@ -138,6 +195,12 @@ function RicciTensor(m::AbstractMetric, p::AbstractVector)
 end
 
 export EinsteinTensor
+"""
+    EinsteinTensor(m::AbstractMetric, p::AbstractVector) -> G
+
+Return the Einstein tensor `G[a, b] = G_{ab} = R_{ab} − ½ R g_{ab}` at the
+4-position `p`. Vanishes identically in vacuum.
+"""
 function EinsteinTensor(m::AbstractMetric, p::AbstractVector)
     g = metric(m, p)
     gu = inv(g)
@@ -164,6 +227,12 @@ struct TranslatedMetric{T,M} <: AbstractMetric
 end
 
 export translate
+"""
+    translate(m::AbstractMetric, distance::AbstractVector) -> AbstractMetric
+
+Return a metric whose value at `x` equals `m`'s value at `x − distance`. Useful
+for off-centring a metric (e.g. moving a black hole away from the origin).
+"""
 function translate(metric::AbstractMetric, distance::AbstractVector)
     return TranslatedMetric(metric, SVector{4}(distance))
 end
@@ -175,6 +244,11 @@ metric(tm::TranslatedMetric, x::AbstractVector) = metric(tm.metric, SVector{4}(x
 ################################################################################
 
 export Minkowski
+"""
+    Minkowski()
+
+The flat Minkowski metric `η = diag(-1, +1, +1, +1)`.
+"""
 struct Minkowski <: AbstractMetric end
 
 Base.nameof(::Minkowski) = "Minkowski metric"
@@ -201,6 +275,21 @@ end
 ################################################################################
 
 export KerrSchild
+"""
+    KerrSchild(M, a=0, Q=0)
+    KerrSchild{T}(M, a=0, Q=0)
+
+Kerr-Newman black hole in **Kerr-Schild** Cartesian coordinates `(t, x, y, z)`.
+
+The metric is `g = η + f k ⊗ k`, where `k` is the principal null vector and
+`f = (2Mr − Q²)/ρ²`, with `r` the spheroidal radius implicitly defined by
+`r⁴ − r²(x²+y²+z²−a²) − a²z² = 0`.
+
+Parameters: mass `M > 0`, spin `|a| < M`, charge `Q` (currently restricted to
+`Q = 0`). Regular on the z-axis and across the future event horizon.
+
+Reference: Cook, *Initial Data for Numerical Relativity*, §3.3.1.
+"""
 struct KerrSchild{T} <: AbstractMetric
     mass::T                     # 0 < M
     spin::T                     # -M < a < +M
@@ -262,6 +351,22 @@ end
 # Kerr-Newman metric in fully harmonic coordinates
 # (Cook, "Initial Data for Numerical Relativity", §3.3.2, eqs. 96–102.)
 export Harmonic
+"""
+    Harmonic(M, a=0, Q=0)
+    Harmonic{T}(M, a=0, Q=0)
+
+Kerr-Newman black hole in **fully harmonic** Cartesian coordinates
+`(t, x, y, z)`, satisfying `□xᵘ = 0` for all four coordinates.
+
+Implemented via a smooth pullback from Kerr-Schild Cartesian coordinates
+(closed-form coordinate map and analytic Jacobian), so the resulting metric is
+regular on the z-axis as well as across the future event horizon. Valid for
+`r > r₋ = M − √(M² − a² − Q²)`; singular on the disk `z = 0`, `x² + y² ≤ a²`.
+
+Parameters: mass `M > 0`, spin and charge constrained by `a² + Q² < M²`.
+
+Reference: Cook, *Initial Data for Numerical Relativity*, §3.3.2.
+"""
 struct Harmonic{T} <: AbstractMetric
     mass::T                     # 0 < M
     spin::T                     # M² > a² + Q²
