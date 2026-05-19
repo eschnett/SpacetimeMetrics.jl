@@ -189,6 +189,31 @@ end
             @test issymmetric(K)
         end
     end
+
+    # Analytic K for Schwarzschild in Kerr-Schild Cartesian (a = Q = 0):
+    #   f = 2M/r,  k_i = x_i/r,  α = 1/√(1+f),  ∂_t γ_{ij} = 0
+    #   K_{ij} = (2M / (r² √(1 + 2M/r))) · [δ_{ij} − (2 + M/r) k_i k_j]
+    for iter in 1:10
+        M = 0.5 + rand()
+        ks = KerrSchild(M)
+
+        for n in 1:10
+            # Stay safely away from the singularity: pick r ∈ [1M, 4M].
+            n̂ = normalize(SVector{3}(randn(3)))
+            r = (1 + 3*rand()) * M
+            xyz = r * n̂
+            x = SVector(randn(), xyz[1], xyz[2], xyz[3])
+            k = n̂
+
+            pref = 2M / (r^2 * sqrt(1 + 2M/r))
+            K_analytic = SMatrix{3,3}(
+                pref * ((i == j ? 1.0 : 0.0) - (2 + M/r) * k[i] * k[j]) for i in 1:3, j in 1:3
+            )
+
+            K = ExtrinsicCurvature(ks, x)
+            @test isapprox(K, K_analytic; atol=1e-12)
+        end
+    end
 end
 
 @testset "Derivatives" begin
