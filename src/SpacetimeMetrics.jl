@@ -104,6 +104,47 @@ function ddmetric(m::AbstractMetric, p::AbstractVector)
     return g, dg, ddg
 end
 
+export ExtrinsicCurvature
+"""
+    ExtrinsicCurvature(m::AbstractMetric, p::AbstractVector) -> K
+
+Return the extrinsic curvature `K_{ij}` of the constant-`t` slice through the
+4-position `p`, in the 3+1 ADM decomposition of [`metric`](@ref):
+`K_{ij} = -(1/(2α)) (∂_t γ_{ij} − D_i β_j − D_j β_i)`,
+where `γ_{ij} = g_{ij}`, `β_i = g_{ti}`, `α = √(−g_{tt} + β^i β_i)`, and `D`
+is the Levi-Civita connection of `γ`. Symmetric in `(i, j)`.
+"""
+function ExtrinsicCurvature(m::AbstractMetric, p::AbstractVector)
+    g, dg = dmetric(m, p)
+
+    γ = g[2:4, 2:4]
+    γu = inv(γ)
+    βl = SVector{3}(g[2, 1], g[3, 1], g[4, 1])
+    β = γu * βl
+    α = sqrt(-g[1, 1] + dot(β, βl))
+
+    dtγ = dg[2:4, 2:4, 1]
+    dγ = dg[2:4, 2:4, 2:4]
+    # dβl[i, j] = ∂_j βl_i = ∂_j g_{i+1, 1}
+    dβl = SMatrix{3,3}(dg[i + 1, 1, j + 1] for i in 1:3, j in 1:3)
+
+    # Γ_abc (spatial)
+    Γl = SArray{Tuple{3,3,3}}((dγ[a, b, c] + dγ[a, c, b] - dγ[b, c, a]) / 2 for a in 1:3, b in 1:3, c in 1:3)
+
+    # Γ^a_bc (spatial)
+    Γ = SArray{Tuple{3,3,3}}(sum(γu[a, x] * Γl[x, b, c] for x in 1:3) for a in 1:3, b in 1:3, c in 1:3)
+
+    # D_i β_j + D_j β_i = ∂_i β_j + ∂_j β_i − 2 Γ^k_{ij} β_k (covariant shift)
+    K = SMatrix{3,3}(
+        (dtγ[i, j] - dβl[i, j] - dβl[j, i] + 2 * sum(Γ[x, i, j] * βl[x] for x in 1:3)) / (-2α) for i in 1:3, j in 1:3
+    )
+
+    # Symmetrize to cancel round-off errors
+    K = (K + K') / 2
+
+    return K::SMatrix{3,3}
+end
+
 export ChristoffelSymbols
 """
     ChristoffelSymbols(m::AbstractMetric, p::AbstractVector) -> Γ
@@ -116,6 +157,7 @@ function ChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     g, dg = dmetric(m, p)
     gu = inv(g)
 
+    # Γ_abc
     Γl = SArray{Tuple{4,4,4}}((dg[a, b, c] + dg[a, c, b] - dg[b, c, a]) / 2 for a in 1:4, b in 1:4, c in 1:4)
 
     # Γ^a_bc
@@ -186,7 +228,7 @@ function RicciTensor(m::AbstractMetric, p::AbstractVector)
 
     # R_ab
     # TODO: Check the sign convention!
-    Rc = SArray{Tuple{4,4}}(sum(Rm[x,a,x,b] for x in 1:4) for a in 1:4, b in 1:4)
+    Rc = SArray{Tuple{4,4}}(sum(Rm[x, a, x, b] for x in 1:4) for a in 1:4, b in 1:4)
 
     # Symmetrize to cancel round-off errors
     Rc = (Rc + Rc') / 2
@@ -206,10 +248,10 @@ function EinsteinTensor(m::AbstractMetric, p::AbstractVector)
     gu = inv(g)
     Rc = RicciTensor(m, p)
 
-    Rs = sum(Rc[x,y] * gu[x,y] for x in 1:4, y in 1:4)
+    Rs = sum(Rc[x, y] * gu[x, y] for x in 1:4, y in 1:4)
 
     # G_ab
-    G = SArray{Tuple{4,4}}(Rc[a,b] - 1//2 * Rs * g[a,b] for a in 1:4, b in 1:4)
+    G = SArray{Tuple{4,4}}(Rc[a, b] - 1//2 * Rs * g[a, b] for a in 1:4, b in 1:4)
 
     # Symmetrize to cancel round-off errors
     G = (G + G') / 2
@@ -469,12 +511,7 @@ function metric(ha::Harmonic, p::AbstractVector)
     o = one(R)
     ze = zero(R)
     # J[μ, ν] = ∂x_ks^μ / ∂x_h^ν, column-major (column = derivative variable).
-    J = SMatrix{4,4}(
-        o,   ze,  ze,  ze,
-        Jtx, Jxx, Jyx, Jzx,
-        Jty, Jxy, Jyy, Jzy,
-        Jtz, Jxz, Jyz, Jzz,
-    )
+    J = SMatrix{4,4}(o, ze, ze, ze, Jtx, Jxx, Jyx, Jzx, Jty, Jxy, Jyy, Jzy, Jtz, Jxz, Jyz, Jzz)
 
     g = J' * g_ks * J
     g = (g + g') / 2

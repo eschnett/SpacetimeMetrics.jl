@@ -139,6 +139,58 @@ end
     end
 end
 
+@testset "ExtrinsicCurvature" begin
+    Random.seed!(6)
+
+    # Minkowski: constant-t slices of flat space are flat — K = 0.
+    minkowski = Minkowski()
+    for n in 1:10
+        x = randn(4)
+        K = ExtrinsicCurvature(minkowski, x)
+        @test isapprox(K, zero(K); atol=1e-12)
+    end
+
+    # ADM identity:  K_{ij} = -(1/(2α)) (∂_t γ_{ij} − L_β γ_{ij})
+    # with  L_β γ_{ij} = β^k ∂_k γ_{ij} + γ_{kj} ∂_i β^k + γ_{ik} ∂_j β^k.
+    # Compare ExtrinsicCurvature to a finite-difference evaluation of the RHS.
+    e4(μ) = SVector{4}(ntuple(i -> i == μ ? 1.0 : 0.0, 4))
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        ks = KerrSchild(M, a)
+
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            K = ExtrinsicCurvature(ks, x)
+
+            g = metric(ks, x)
+            γ = g[2:4, 2:4]
+            βl = SVector{3}(g[2, 1], g[3, 1], g[4, 1])
+            β = inv(γ) * βl
+            α = sqrt(-g[1, 1] + dot(β, βl))
+
+            shift_up(y) = let gy = metric(ks, y)
+                inv(gy[2:4, 2:4]) * SVector{3}(gy[2, 1], gy[3, 1], gy[4, 1])
+            end
+
+            ε = 1e-5
+            dμ_γ = ntuple(μ -> (metric(ks, x + ε*e4(μ))[2:4, 2:4] - metric(ks, x - ε*e4(μ))[2:4, 2:4]) / (2ε), 4)
+            dk_β = ntuple(k -> (shift_up(x + ε*e4(k + 1)) - shift_up(x - ε*e4(k + 1))) / (2ε), 3)
+
+            Lβγ = SMatrix{3,3}(
+                sum(β[k] * dμ_γ[k + 1][i, j] for k in 1:3)
+                + sum(γ[k, j] * dk_β[i][k] for k in 1:3)
+                + sum(γ[i, k] * dk_β[j][k] for k in 1:3)
+                for i in 1:3, j in 1:3
+            )
+
+            K_fd = -(dμ_γ[1] - Lβγ) / (2α)
+            @test isapprox(K, K_fd; atol=1e-6)
+            @test issymmetric(K)
+        end
+    end
+end
+
 @testset "Derivatives" begin
     Random.seed!(5)
     for iter in 1:10
