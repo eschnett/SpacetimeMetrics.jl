@@ -1,4 +1,5 @@
 using LinearAlgebra
+using Random
 using SpacetimeMetrics
 using StaticArrays
 using Test
@@ -14,6 +15,7 @@ function metrics_are_equal(m1, m2)
 end
 
 @testset "Minkowski" begin
+    Random.seed!(1)
     minkowski = Minkowski()
 
     for iter in 1:10
@@ -26,6 +28,7 @@ end
 end
 
 @testset "Kerr-Schild" begin
+    Random.seed!(2)
     kerrschild = KerrSchild(1.0)
     kerrschild = KerrSchild(1.0, 0.5)
     kerrschild = KerrSchild(1.0, 0.5, 0.5)
@@ -51,6 +54,7 @@ end
 end
 
 @testset "Harmonic" begin
+    Random.seed!(3)
     ha = Harmonic(1.0)
     ha = Harmonic(1.0, 0.5)
     ha = Harmonic(1.0, 0.5, 0.0)
@@ -117,6 +121,7 @@ end
 end
 
 @testset "Translations" begin
+    Random.seed!(4)
     ks = KerrSchild(1.0, 0.5)
 
     for iter in 1:10
@@ -135,6 +140,7 @@ end
 end
 
 @testset "Derivatives" begin
+    Random.seed!(5)
     for iter in 1:10
         M = 0.5 + rand()
         a = rand() - 0.5

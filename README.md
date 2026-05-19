@@ -3,7 +3,7 @@
 Analytically known metrics for general relativity.
 
 [![CI](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/CI.yml)
-[![Documentation](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/docs.yml/badge.svg)](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/docs.yml)
+[![Documentation](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/docs.yml/badge.svg)](https://eschnett.github.io/SpacetimeMetrics.jl/dev/)
 
 ## Overview
 

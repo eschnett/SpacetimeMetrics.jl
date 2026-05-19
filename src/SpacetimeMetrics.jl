@@ -381,7 +381,7 @@ function Harmonic(mass, spin=0, charge=0)
     Harmonic{T}(mass, spin, charge)
 end
 
-Base.nameof(kh::Harmonic) = "Kerr-Newman metric in fully harmonic coordinates (M=$(kh.mass), a=$(kh.spin), Q=$(kh.charge))"
+Base.nameof(ha::Harmonic) = "Kerr-Newman metric in fully harmonic coordinates (M=$(ha.mass), a=$(ha.spin), Q=$(ha.charge))"
 
 # Inner: Kerr-Newman in Kerr-Schild Cartesian coordinates.
 # g = η + f k k with f = (2Mr - Q²)/ρ² and the null vector
@@ -418,10 +418,10 @@ end
 #     t_KS = t − 2M ln(2M / (r − r₋))
 # All four expressions, and the analytic Jacobian below, are smooth on the
 # z-axis (where x = y = 0 makes R_x = R_y = 0, x_KS = y_KS = 0).
-function metric(kh::Harmonic, p::AbstractVector)
-    M = kh.mass
-    a = kh.spin
-    Q = kh.charge
+function metric(ha::Harmonic, p::AbstractVector)
+    M = ha.mass
+    a = ha.spin
+    Q = ha.charge
 
     @assert length(p) == 4
     t, x, y, z = p
