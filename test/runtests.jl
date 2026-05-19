@@ -94,6 +94,26 @@ end
             @test isapprox(Rs, 0; atol=1e-8)
         end
     end
+
+    # The harmonic chart and its derivatives are regular on the z-axis (away
+    # from the disk z = 0, x² + y² ≤ a²). Test directly at x = y = 0.
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        ha = Harmonic(M, a)
+
+        for n in 1:10
+            z = sign(randn()) * (1 + 2*rand())
+            x = SVector(randn(), 0.0, 0.0, z)
+            g = metric(ha, x)
+            @test all(isfinite, g)
+            @test issymmetric(g)
+
+            G = EinsteinTensor(ha, x)
+            @test all(isfinite, G)
+            @test isapprox(G, zero(G); atol=1e-8)
+        end
+    end
 end
 
 @testset "Translations" begin

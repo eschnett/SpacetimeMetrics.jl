@@ -278,107 +278,101 @@ end
 
 Base.nameof(kh::Harmonic) = "Kerr-Newman metric in fully harmonic coordinates (M=$(kh.mass), a=$(kh.spin), Q=$(kh.charge))"
 
-# 4-metric in the spheroidal (t, r, θ, φ) chart used by Cook eqs. 96–102.
-# Built from the ADM lapse, shift and 3-metric as g_tt = -α² + γ_ij β^i β^j,
-# g_ti = γ_ij β^j, g_ij = γ_ij.
-function _kerr_harmonic_spheroidal_metric(kh::Harmonic, p::AbstractVector)
+# Inner: Kerr-Newman in Kerr-Schild Cartesian coordinates.
+# g = η + f k k with f = (2Mr - Q²)/ρ² and the null vector
+#     k = (1, (r x + a y)/(r²+a²), (r y - a x)/(r²+a²), z/r).
+# Regular on the z-axis (k has well-defined limits there).
+function _kerr_newman_ks_metric(M, a, Q, p_ks::AbstractVector)
+    @assert length(p_ks) == 4
+    t, x, y, z = p_ks
+
+    s = x^2 + y^2 + z^2 - a^2
+    r = sqrt((s + sqrt(s^2 + 4 * a^2 * z^2)) / 2)
+
+    ρ² = r^2 + a^2 * (z / r)^2
+    f = (2M*r - Q^2) / ρ²
+    rA = r^2 + a^2
+    k = SVector(one(r), (r*x + a*y)/rA, (r*y - a*x)/rA, z/r)
+
+    g = SMatrix{4,4}(η[i, j] + f * k[i] * k[j] for i in 1:4, j in 1:4)
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+# Outer: harmonic Cartesian → Kerr-Schild Cartesian pullback.
+#
+# The Cook §3.3.2 spheroidal chart (used by Cook eqs. 96–102) has the usual
+# r/θ/φ coordinate singularity on the z-axis. Instead, route through Kerr-Schild
+# Cartesian, whose coordinate map and Jacobian are smooth everywhere away from
+# the disk (R = 0) and the Cauchy horizon (r = r₋).
+#
+# Given harmonic Cartesian (t, x, y, z): solve the quartic for R = r − M, then
+#     x_KS = (x (rR + a²) + M a y) / (R² + a²)
+#     y_KS = (y (rR + a²) − M a x) / (R² + a²)
+#     z_KS = r z / R
+#     t_KS = t − 2M ln(2M / (r − r₋))
+# All four expressions, and the analytic Jacobian below, are smooth on the
+# z-axis (where x = y = 0 makes R_x = R_y = 0, x_KS = y_KS = 0).
+function metric(kh::Harmonic, p::AbstractVector)
     M = kh.mass
     a = kh.spin
     Q = kh.charge
 
     @assert length(p) == 4
-    t, r, θ, φ = p
-    cos²θ = cos(θ)^2
-    sin²θ = sin(θ)^2
-
-    rt = sqrt(M^2 - a^2 - Q^2)
-    r₊ = M + rt
-    r₋ = M - rt
-
-    ρ² = r^2 + a^2 * cos²θ
-    Hh = (r + r₊) / (r - r₋)
-    Kh = 2M / (r - r₋)
-    Φ = (2M*r - Q^2) / ρ²
-
-    α⁻² = 1 + Φ * Hh + (r₊^2 + a^2) / ρ² * Kh
-    α² = inv(α⁻²)
-
-    βʳ = α² * (r₊^2 + a^2) / ρ²
-    βᶲ = -α² * (a / ρ²) * Kh
-
-    γ_rr = (2 - (1 - Φ) * Hh) * Hh
-    γ_rφ = -(1 + Φ * Hh) * a * sin²θ
-    γ_θθ = ρ²
-    γ_φφ = (r^2 + a^2 + Φ * a^2 * sin²θ) * sin²θ
-
-    g_tt = -α² + γ_rr * βʳ^2 + 2 * γ_rφ * βʳ * βᶲ + γ_φφ * βᶲ^2
-    g_tr = γ_rr * βʳ + γ_rφ * βᶲ
-    g_tφ = γ_rφ * βʳ + γ_φφ * βᶲ
-    o = zero(g_tt)
-
-    g = SMatrix{4,4}(
-        g_tt, g_tr, o,    g_tφ,
-        g_tr, γ_rr, o,    γ_rφ,
-        o,    o,    γ_θθ, o,
-        g_tφ, γ_rφ, o,    γ_φφ,
-    )
-    return g::SMatrix{4,4}
-end
-
-function metric(kh::Harmonic, p::AbstractVector)
-    M = kh.mass
-    a = kh.spin
-
-    @assert length(p) == 4
     t, x, y, z = p
 
-    # Solve the quartic R⁴ - R²(x² + y² + z² - a²) - a² z² = 0 for R² = (r-M)²
+    # Solve R⁴ − R²(x² + y² + z² − a²) − a²z² = 0 for R = r − M
     s = x^2 + y^2 + z^2 - a^2
     R² = (s + sqrt(s^2 + 4 * a^2 * z^2)) / 2
     R = sqrt(R²)
     r = R + M
 
-    # Reconstruct spheroidal angles via atan2 of (sin, cos) extracted from the
-    # forward map. Differentiable and stable away from the z-axis / disk.
-    cos_θ = z / R
-    sin²θ = 1 - cos_θ^2
-    sin_θ = sqrt(sin²θ)
-    denom = (R² + a^2) * sin_θ
-    cos_φ = (R * x + a * y) / denom
-    sin_φ = (R * y - a * x) / denom
-    θ = atan(sin_θ, cos_θ)
-    φ = atan(sin_φ, cos_φ)
+    r₋ = M - sqrt(M^2 - a^2 - Q^2)
 
-    g_sph = _kerr_harmonic_spheroidal_metric(kh, SVector(t, r, θ, φ))
+    A = R² + a^2
+    B = r*R + a^2
 
-    # Spatial Jacobian K[i, A] = ∂x^i / ∂X^A. With R = r - M, ∂R/∂r = 1.
-    Kspat = SMatrix{3,3}(
-        sin_θ * cos_φ,
-        sin_θ * sin_φ,
-        cos_θ,
-        R*cos_θ*cos_φ - a*cos_θ*sin_φ,
-        R*cos_θ*sin_φ + a*cos_θ*cos_φ,
-        -R*sin_θ,
-        -y,
-        x,
-        zero(x),
+    x_ks = (x*B + M*a*y) / A
+    y_ks = (y*B - M*a*x) / A
+    z_ks = r * z / R
+    t_ks = t - 2M * log(2M / (r - r₋))
+
+    g_ks = _kerr_newman_ks_metric(M, a, Q, SVector(t_ks, x_ks, y_ks, z_ks))
+
+    # Implicit-derivative partials of R w.r.t. (x, y, z), from the quartic
+    ξ = R²^2 + a^2 * z^2
+    R_x = R² * R * x / ξ
+    R_y = R² * R * y / ξ
+    R_z = R * A * z / ξ
+
+    fx = x * (2R + M) - 2R * x_ks
+    fy = y * (2R + M) - 2R * y_ks
+
+    Jtx = 2M * R_x / (r - r₋)
+    Jty = 2M * R_y / (r - r₋)
+    Jtz = 2M * R_z / (r - r₋)
+    Jxx = (B + R_x * fx) / A
+    Jxy = (M*a + R_y * fx) / A
+    Jxz = (R_z * fx) / A
+    Jyx = (-M*a + R_x * fy) / A
+    Jyy = (B + R_y * fy) / A
+    Jyz = (R_z * fy) / A
+    Jzx = -z * M * R_x / R²
+    Jzy = -z * M * R_y / R²
+    Jzz = (1 + M/R) - z * M * R_z / R²
+
+    o = one(R)
+    ze = zero(R)
+    # J[μ, ν] = ∂x_ks^μ / ∂x_h^ν, column-major (column = derivative variable).
+    J = SMatrix{4,4}(
+        o,   ze,  ze,  ze,
+        Jtx, Jxx, Jyx, Jzx,
+        Jty, Jxy, Jyy, Jzy,
+        Jtz, Jxz, Jyz, Jzz,
     )
-    Jspat = inv(Kspat)          # Jspat[A, i] = ∂X^A / ∂x^i
 
-    T = eltype(Jspat)
-    o, ze = one(T), zero(T)
-    J = SMatrix{4,4,T}(
-        o,  ze,           ze,           ze,
-        ze, Jspat[1, 1],  Jspat[2, 1],  Jspat[3, 1],
-        ze, Jspat[1, 2],  Jspat[2, 2],  Jspat[3, 2],
-        ze, Jspat[1, 3],  Jspat[2, 3],  Jspat[3, 3],
-    )
-
-    g = J' * g_sph * J
-
-    # Symmetrize to cancel round-off errors
+    g = J' * g_ks * J
     g = (g + g') / 2
-
     return g::SMatrix{4,4}
 end
 
