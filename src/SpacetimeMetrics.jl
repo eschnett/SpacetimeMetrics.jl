@@ -285,6 +285,57 @@ metric(tm::TranslatedMetric, x::AbstractVector) = metric(tm.metric, SVector{4}(x
 
 ################################################################################
 
+struct RotatedMetric{T,M} <: AbstractMetric
+    metric::M
+    angles::SVector{3,T}        # ZYZ Euler angles (ψ, θ, φ)
+    R::SMatrix{4,4,T,16}        # spatial rotation, identity on t
+end
+
+export rotate
+"""
+    rotate(m::AbstractMetric, ψ, θ, φ) -> AbstractMetric
+
+Return a metric in which the spatial axes of `m` have been rotated by the
+proper Euler angles `(ψ, θ, φ)` in ZYZ convention,
+`R = R_z(ψ) · R_y(θ) · R_z(φ)`, with `R` acting as identity on `t`.
+
+If `g` is the original metric and `R₄` is the 4×4 block matrix `diag(1, R)`,
+the rotated metric at `x` is `R₄ · g(R₄ᵀ x) · R₄ᵀ`. Useful e.g. for tilting a
+spinning black hole's spin axis away from `ẑ`.
+"""
+function rotate(m::AbstractMetric, ψ, θ, φ)
+    T = promote_type(typeof(ψ), typeof(θ), typeof(φ))
+    ψ, θ, φ = T(ψ), T(θ), T(φ)
+    cψ, sψ = cos(ψ), sin(ψ)
+    cθ, sθ = cos(θ), sin(θ)
+    cφ, sφ = cos(φ), sin(φ)
+    o = one(cψ)
+    z = zero(cψ)
+    # R = R_z(ψ) R_y(θ) R_z(φ), embedded as diag(1, R₃) in 4D; column-major.
+    R = SMatrix{4,4}(
+        o, z, z, z,
+        z,  cψ*cθ*cφ - sψ*sφ,  sψ*cθ*cφ + cψ*sφ, -sθ*cφ,
+        z, -cψ*cθ*sφ - sψ*cφ, -sψ*cθ*sφ + cψ*cφ,  sθ*sφ,
+        z,  cψ*sθ,              sψ*sθ,             cθ,
+    )
+    return RotatedMetric(m, SVector{3}(ψ, θ, φ), R)
+end
+
+function Base.nameof(rm::RotatedMetric)
+    ψ, θ, φ = rm.angles
+    return nameof(rm.metric) * ", rotated by ZYZ Euler angles (ψ=$ψ, θ=$θ, φ=$φ)"
+end
+
+function metric(rm::RotatedMetric, x::AbstractVector)
+    x_old = rm.R' * SVector{4}(x)
+    g_old = metric(rm.metric, x_old)
+    g = rm.R * g_old * rm.R'
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+################################################################################
+
 export Minkowski
 """
     Minkowski()

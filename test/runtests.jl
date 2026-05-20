@@ -139,6 +139,79 @@ end
     end
 end
 
+@testset "Rotations" begin
+    Random.seed!(7)
+
+    # Identity rotation is the identity transformation.
+    let ks = KerrSchild(1.0, 0.3)
+        rm = rotate(ks, 0.0, 0.0, 0.0)
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            @test isapprox(metric(rm, x), metric(ks, x))
+        end
+    end
+
+    # Minkowski is rotation-invariant.
+    let mink = Minkowski()
+        for n in 1:10
+            ψ, θ, φ = 2π*rand(), π*rand(), 2π*rand()
+            rm = rotate(mink, ψ, θ, φ)
+            x = randn(4)
+            @test isapprox(metric(rm, x), metric(mink, x))
+        end
+    end
+
+    # Schwarzschild (a = 0) is spherically symmetric: rotation leaves g invariant.
+    for iter in 1:10
+        M = 0.5 + rand()
+        ks = KerrSchild(M)
+        ψ, θ, φ = 2π*rand(), π*rand(), 2π*rand()
+        rm = rotate(ks, ψ, θ, φ)
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            @test isapprox(metric(rm, x), metric(ks, x); atol=1e-12)
+        end
+    end
+
+    # Rotation is a diffeomorphism: Einstein tensor still vanishes in vacuum.
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        ks = KerrSchild(M, a)
+        ψ, θ, φ = 2π*rand(), π*rand(), 2π*rand()
+        rm = rotate(ks, ψ, θ, φ)
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            g = metric(rm, x)
+            @test issymmetric(g)
+            G = EinsteinTensor(rm, x)
+            @test isapprox(G, zero(G); atol=1e-7)
+        end
+    end
+
+    # Rotating Kerr by (0, π/2, 0) tilts the spin axis from ẑ to x̂:
+    # the rotated metric at (t, x, y, z) should equal the original at (t, -z, y, x)
+    # (since R_y(π/2) sends (x,y,z) ↦ (z, y, -x), so R_y(π/2)^T sends (x,y,z) ↦ (-z, y, x)).
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        ks = KerrSchild(M, a)
+        rm = rotate(ks, 0.0, π/2, 0.0)
+
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            x_old = SVector(x[1], -x[4], x[3], x[2])
+
+            R₃ = SMatrix{3,3}(0.0, 0.0, -1.0,  0.0, 1.0, 0.0,  1.0, 0.0, 0.0)  # R_y(π/2), column-major
+            R₄ = SMatrix{4,4}(1.0, 0.0, 0.0, 0.0,
+                              0.0, R₃[1,1], R₃[2,1], R₃[3,1],
+                              0.0, R₃[1,2], R₃[2,2], R₃[3,2],
+                              0.0, R₃[1,3], R₃[2,3], R₃[3,3])
+            @test isapprox(metric(rm, x), R₄ * metric(ks, x_old) * R₄'; atol=1e-12)
+        end
+    end
+end
+
 @testset "ExtrinsicCurvature" begin
     Random.seed!(6)
 
