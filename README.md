@@ -3,7 +3,7 @@
 Analytically known metrics for general relativity.
 
 [![CI](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/CI.yml)
-[![Documentation](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/docs.yml/badge.svg)](https://eschnett.github.io/SpacetimeMetrics.jl/dev/)
+[![Documentation](https://github.com/eschnett/SpacetimeMetrics.jl/actions/workflows/docs.yml/badge.svg)](https://eschnett.github.io/SpacetimeMetrics.jl/)
 
 ## Overview
 
@@ -11,10 +11,12 @@ Metrics:
 - Minkowski
 - Kerr-Schild (without charge)
 - Harmonic coordinates
+- Gauge wave (Apples-with-Apples testbed)
 
 Transformations:
 - Translations
-- Rotations (yet to come)
+- Rotations
+- Gauge wave (time-dependent coordinate transformation)
 - Boosts (yet to come)
 
 Geometry:

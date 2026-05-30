@@ -336,6 +336,83 @@ end
 
 ################################################################################
 
+struct GaugeWaveMetric{T,M} <: AbstractMetric
+    metric::M
+    amplitude::T                # A,  with |A| < 1
+    period::T                   # d > 0
+end
+
+export gaugewave
+"""
+    gaugewave(m::AbstractMetric, A, d) -> AbstractMetric
+
+Apply the time-dependent *gauge-wave* coordinate transformation to `m`. Applied
+to [`Minkowski`](@ref) this produces the Apples-with-Apples gauge-wave testbed,
+flat spacetime expressed in a sinusoidally oscillating, time-dependent chart.
+
+The new coordinates `(t, x, y, z)` map to the inner metric's coordinates
+`(t̂, x̂, ŷ, ẑ)` by
+
+    t̂ = t − (A d / 4π) cos(2π(x − t)/d)
+    x̂ = x + (A d / 4π) cos(2π(x − t)/d)
+    ŷ = y,   ẑ = z
+
+with Jacobian `J^α_μ = ∂x̂^α/∂x^μ`, and the metric is the pullback
+`g_{μν} = J^α_μ J^β_ν ĝ_{αβ}`. For `m = Minkowski()` this gives
+
+    ds² = −H dt² + H dx² + dy² + dz²,   H = 1 − A sin(2π(x − t)/d),
+
+a flat (vanishing-curvature) but genuinely time-dependent metric.
+
+The wave propagates along `x̂` and has amplitude `A` (require `|A| < 1` so that
+`H > 0` and the signature is preserved) and spatial period `d > 0`.
+
+Reference: Alcubierre et al., "Toward standard testbeds for numerical
+relativity", arXiv:gr-qc/0305023, eqns. (4.3)–(4.4).
+"""
+function gaugewave(m::AbstractMetric, A, d)
+    T = promote_type(typeof(A), typeof(d))
+    A, d = T(A), T(d)
+    abs(A) < 1 || throw(ArgumentError("gauge-wave amplitude must satisfy |A| < 1, got A = $A"))
+    d > 0 || throw(ArgumentError("gauge-wave period must satisfy d > 0, got d = $d"))
+    return GaugeWaveMetric(m, A, d)
+end
+
+Base.nameof(gw::GaugeWaveMetric) = nameof(gw.metric) * ", gauge wave (A=$(gw.amplitude), d=$(gw.period))"
+
+function metric(gw::GaugeWaveMetric, x::AbstractVector)
+    x = SVector{4}(x)
+    A = gw.amplitude
+    d = gw.period
+    t, X, y, z = x
+
+    φ = 2 * oftype(X, π) * (X - t) / d
+    C = A * d / (4 * oftype(A, π))
+
+    # Inner (e.g. inertial) coordinates Φ(x)
+    cφ = cos(φ)
+    x_old = SVector(t - C * cφ, X + C * cφ, y, z)
+    g_old = metric(gw.metric, x_old)
+
+    # Jacobian J[α, μ] = ∂x̂^α/∂x^μ, column-major (column = derivative variable);
+    # only the (t, x) block is non-trivial, with s = (A/2) sin φ.
+    s = (A / 2) * sin(φ)
+    o = one(s)
+    ze = zero(s)
+    J = SMatrix{4,4}(
+        1 - s, s, ze, ze,
+        s, 1 - s, ze, ze,
+        ze, ze, o, ze,
+        ze, ze, ze, o,
+    )
+
+    g = J' * g_old * J
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+################################################################################
+
 export Minkowski
 """
     Minkowski()
@@ -347,6 +424,23 @@ struct Minkowski <: AbstractMetric end
 Base.nameof(::Minkowski) = "Minkowski metric"
 
 metric(::Minkowski, ::AbstractVector{T}) where {T} = SMatrix{4,4,T}(η)
+
+export GaugeWave
+"""
+    GaugeWave(A, d)
+
+The Apples-with-Apples gauge-wave testbed: flat Minkowski spacetime in a
+time-dependent, sinusoidally oscillating chart,
+
+    ds² = −H dt² + H dx² + dy² + dz²,   H = 1 − A sin(2π(x − t)/d).
+
+Shorthand for `gaugewave(Minkowski(), A, d)`; see [`gaugewave`](@ref) for the
+underlying coordinate transformation and parameter constraints.
+
+Reference: Alcubierre et al., "Toward standard testbeds for numerical
+relativity", arXiv:gr-qc/0305023, eqns. (4.3)–(4.4).
+"""
+GaugeWave(A, d) = gaugewave(Minkowski(), A, d)
 
 ################################################################################
 

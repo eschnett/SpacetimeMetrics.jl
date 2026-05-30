@@ -212,6 +212,66 @@ end
     end
 end
 
+@testset "GaugeWave" begin
+    Random.seed!(8)
+
+    H(A, d, t, x) = 1 - A * sin(2π * (x - t) / d)
+
+    # Input validation
+    @test_throws ArgumentError gaugewave(Minkowski(), 1.0, 1.0)
+    @test_throws ArgumentError gaugewave(Minkowski(), -1.5, 1.0)
+    @test_throws ArgumentError gaugewave(Minkowski(), 0.5, 0.0)
+    @test_throws ArgumentError gaugewave(Minkowski(), 0.5, -1.0)
+
+    # Closed-form match: g = diag(-H, H, 1, 1)
+    for iter in 1:10
+        A = (rand() - 0.5)        # |A| < 0.5
+        d = 0.5 + rand()
+        gw = GaugeWave(A, d)
+        for n in 1:10
+            x = randn(4)
+            t, X = x[1], x[2]
+            h = H(A, d, t, X)
+            g = metric(gw, x)
+            @test issymmetric(g)
+            @test isapprox(g, diagm([-h, h, 1.0, 1.0]); atol=1e-12)
+            @test h > 0          # signature preserved for |A| < 1
+        end
+    end
+
+    # A = 0 reduces to Minkowski.
+    let mink = Minkowski()
+        @test metrics_are_equal(mink, GaugeWave(0.0, 1.0))
+    end
+
+    # The gauge wave is a diffeomorphism of flat space: curvature vanishes.
+    for iter in 1:10
+        A = (rand() - 0.5)
+        d = 0.5 + rand()
+        gw = GaugeWave(A, d)
+        for n in 1:10
+            x = randn(4)
+            G = EinsteinTensor(gw, x)
+            @test isapprox(G, zero(G); atol=1e-9)
+            Rm = RiemannTensor(gw, x)
+            @test isapprox(Rm, zero(Rm); atol=1e-9)
+        end
+    end
+
+    # Genuinely time-dependent: ∂_t g ≠ 0 and K ≠ 0 (unlike static charts).
+    for iter in 1:10
+        A = 0.1 + 0.4 * rand()    # bounded away from 0
+        d = 0.5 + rand()
+        gw = GaugeWave(A, d)
+        x = randn(4)
+        _, dg = dmetric(gw, x)
+        @test maximum(abs, dg[:, :, 1]) > 1e-6
+        K = ExtrinsicCurvature(gw, x)
+        @test issymmetric(K)
+        @test maximum(abs, K) > 1e-6
+    end
+end
+
 @testset "ExtrinsicCurvature" begin
     Random.seed!(6)
 
