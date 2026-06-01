@@ -336,6 +336,61 @@ end
 
 ################################################################################
 
+struct BoostedMetric{T,M} <: AbstractMetric
+    metric::M
+    velocity::SVector{3,T}      # boost velocity, |v| < 1
+    Λ::SMatrix{4,4,T,16}        # pure Lorentz boost, symmetric
+end
+
+export boost
+"""
+    boost(m::AbstractMetric, v::AbstractVector) -> AbstractMetric
+
+Return a metric in which the inertial frame of `m` has been Lorentz-boosted by
+the velocity 3-vector `v` (geometric units, `c = 1`, so `|v| < 1` is required).
+
+With `β = |v|`, `n̂ = v/β`, and `γ = 1/√(1 − β²)`, the pure-boost matrix is
+
+    Λ = [ γ            γ vⱼ                  ]
+        [ γ vᵢ    δᵢⱼ + (γ − 1) n̂ᵢ n̂ⱼ ]   (symmetric)
+
+If `g` is the original metric, the boosted metric at `x` is `Λ · g(Λᵀ x) · Λᵀ`.
+Because `Λ` is a Lorentz transformation, boosting leaves Minkowski invariant and
+preserves vacuum (the Einstein tensor stays zero).
+"""
+function boost(m::AbstractMetric, v::AbstractVector)
+    T = float(eltype(SVector{3}(v)))
+    v = SVector{3,T}(v)
+    β = norm(v)
+    β < 1 || throw(ArgumentError("boost speed must satisfy |v| < 1, got |v| = $β"))
+
+    γ = 1 / sqrt(1 - β^2)
+    # δᵢⱼ + (γ−1) n̂ᵢ n̂ⱼ = δᵢⱼ + f vᵢ vⱼ with f = (γ−1)/β²; f → 1/2 as β → 0.
+    f = β == 0 ? zero(T) : (γ - 1) / β^2
+    γv = γ * v
+
+    # Λ[α, μ], column-major (Λ is symmetric, so layout is unambiguous).
+    Λ = SMatrix{4,4,T}(
+        γ, γv[1], γv[2], γv[3],
+        γv[1], 1 + f*v[1]*v[1], f*v[2]*v[1], f*v[3]*v[1],
+        γv[2], f*v[1]*v[2], 1 + f*v[2]*v[2], f*v[3]*v[2],
+        γv[3], f*v[1]*v[3], f*v[2]*v[3], 1 + f*v[3]*v[3],
+    )
+    return BoostedMetric(m, v, Λ)
+end
+
+Base.nameof(bm::BoostedMetric) = nameof(bm.metric) * ", boosted by velocity $(bm.velocity)"
+
+function metric(bm::BoostedMetric, x::AbstractVector)
+    x_old = bm.Λ' * SVector{4}(x)
+    g_old = metric(bm.metric, x_old)
+    g = bm.Λ * g_old * bm.Λ'
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+################################################################################
+
 struct GaugeWaveMetric{T,M} <: AbstractMetric
     metric::M
     amplitude::T                # A,  with |A| < 1

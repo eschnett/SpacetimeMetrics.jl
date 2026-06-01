@@ -16,8 +16,8 @@ Metrics:
 Transformations:
 - Translations
 - Rotations
+- Boosts
 - Gauge wave (time-dependent coordinate transformation)
-- Boosts (yet to come)
 
 Geometry:
 - first and second derivatives of the metric

@@ -212,6 +212,67 @@ end
     end
 end
 
+@testset "Boosts" begin
+    Random.seed!(9)
+
+    # |v| ≥ 1 is rejected.
+    @test_throws ArgumentError boost(Minkowski(), [1.0, 0.0, 0.0])
+    @test_throws ArgumentError boost(Minkowski(), [0.8, 0.8, 0.0])
+
+    # Zero velocity is the identity transformation.
+    let ks = KerrSchild(1.0, 0.3)
+        bm = boost(ks, [0.0, 0.0, 0.0])
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            @test isapprox(metric(bm, x), metric(ks, x))
+        end
+    end
+
+    # Minkowski is boost-invariant.
+    let mink = Minkowski()
+        for n in 1:10
+            v = (rand(3) .- 0.5) * 0.9
+            bm = boost(mink, v)
+            x = randn(4)
+            @test isapprox(metric(bm, x), metric(mink, x); atol=1e-12)
+        end
+    end
+
+    # Boost is a Lorentz transformation: Einstein tensor still vanishes in vacuum.
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        ks = KerrSchild(M, a)
+        v = normalize(randn(3)) * (0.7 * rand())
+        bm = boost(ks, v)
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            g = metric(bm, x)
+            @test issymmetric(g)
+            G = EinsteinTensor(bm, x)
+            @test isapprox(G, zero(G); atol=1e-7)
+        end
+    end
+
+    # Explicit pullback check against a hand-built x-boost matrix.
+    for iter in 1:10
+        M = 0.5 + rand()
+        a = (rand() - 0.5) * 0.5
+        ks = KerrSchild(M, a)
+        β = 0.8 * rand()
+        bm = boost(ks, [β, 0.0, 0.0])
+        γ = 1 / sqrt(1 - β^2)
+        Λ = SMatrix{4,4}(γ, γ*β, 0.0, 0.0,
+                         γ*β, γ, 0.0, 0.0,
+                         0.0, 0.0, 1.0, 0.0,
+                         0.0, 0.0, 0.0, 1.0)
+        for n in 1:10
+            x = 2 .+ SVector{4}(randn(4))
+            @test isapprox(metric(bm, x), Λ * metric(ks, Λ' * x) * Λ'; atol=1e-12)
+        end
+    end
+end
+
 @testset "GaugeWave" begin
     Random.seed!(8)
 
