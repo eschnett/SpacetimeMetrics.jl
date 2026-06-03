@@ -104,6 +104,32 @@ function ddmetric(m::AbstractMetric, p::AbstractVector)
     return g, dg, ddg
 end
 
+export adm_decompose
+"""
+    adm_decompose(g::SMatrix{4,4}) -> (α, β, γ)
+    adm_decompose(m::AbstractMetric, p::AbstractVector) -> (α, β, γ)
+
+Decompose a 4-metric into its ADM 3+1 variables: the lapse `α`
+(scalar), the contravariant shift `β :: SVector{3}` (`β^i`), and the
+spatial 3-metric `γ :: SMatrix{3,3}` (`γ_{ij}`), such that
+
+`ds² = −α² dt² + γ_{ij} (dx^i + β^i dt)(dx^j + β^j dt)`,
+
+i.e. `γ_{ij} = g_{ij}`, `β_i = g_{ti}`, `β^i = γ^{ij} β_j`, and
+`α = √(−g_{tt} + β^i β_i)`. Allocation-free and AD/GPU-friendly.
+"""
+@inline function adm_decompose(g::SMatrix{4,4})
+    γ = SMatrix{3,3}(g[i + 1, j + 1] for i in 1:3, j in 1:3)
+    γu = inv(γ)
+    βl = SVector{3}(g[2, 1], g[3, 1], g[4, 1])
+    β = γu * βl
+    α = sqrt(-g[1, 1] + dot(β, βl))
+    return α, β, γ
+end
+
+adm_decompose(m::AbstractMetric, p::AbstractVector) =
+    adm_decompose(metric(m, SVector{4}(p)))
+
 export ExtrinsicCurvature
 """
     ExtrinsicCurvature(m::AbstractMetric, p::AbstractVector) -> K
@@ -117,11 +143,9 @@ is the Levi-Civita connection of `γ`. Symmetric in `(i, j)`.
 function ExtrinsicCurvature(m::AbstractMetric, p::AbstractVector)
     g, dg = dmetric(m, p)
 
-    γ = g[2:4, 2:4]
+    α, β, γ = adm_decompose(g)
     γu = inv(γ)
     βl = SVector{3}(g[2, 1], g[3, 1], g[4, 1])
-    β = γu * βl
-    α = sqrt(-g[1, 1] + dot(β, βl))
 
     dtγ = dg[2:4, 2:4, 1]
     dγ = dg[2:4, 2:4, 2:4]
@@ -465,6 +489,87 @@ function metric(gw::GaugeWaveMetric, x::AbstractVector)
     g = (g + g') / 2
     return g::SMatrix{4,4}
 end
+
+################################################################################
+
+struct SineShiftMetric{T,M} <: AbstractMetric
+    metric::M
+    amplitude::T                # A,  with |A| < 1
+    period::T                   # d > 0
+end
+
+export sineshift
+"""
+    sineshift(m::AbstractMetric, A, d) -> AbstractMetric
+
+Apply a time-dependent sinusoidal *spatial* reparametrisation to `m`:
+the new coordinates `(t, x, y, z)` map to the inner metric's
+coordinates by
+
+    t̂ = t,   x̂ = x + (A d / 2π) sin(2π(x − t)/d),   ŷ = y,   ẑ = z
+
+with Jacobian `J^α_μ = ∂x̂^α/∂x^μ`; the metric is the pullback
+`g_{μν} = J^α_μ J^β_ν ĝ_{αβ}`. For `m = Minkowski()` this gives,
+with `c = cos(2π(x − t)/d)`,
+
+    α = 1,   βˣ = −A c / (1 + A c),   γ_xx = (1 + A c)²
+
+— a flat metric with genuinely space- and time-varying shift and
+spatial metric but unit lapse (complementary to [`gaugewave`](@ref),
+which varies the lapse but has no shift). Require `|A| < 1` so the
+map stays invertible (`∂x̂/∂x = 1 + A c > 0`).
+"""
+function sineshift(m::AbstractMetric, A, d)
+    T = promote_type(typeof(A), typeof(d))
+    A, d = T(A), T(d)
+    abs(A) < 1 || throw(ArgumentError("sine-shift amplitude must satisfy |A| < 1, got A = $A"))
+    d > 0 || throw(ArgumentError("sine-shift period must satisfy d > 0, got d = $d"))
+    return SineShiftMetric(m, A, d)
+end
+
+Base.nameof(sw::SineShiftMetric) = nameof(sw.metric) * ", sine shift (A=$(sw.amplitude), d=$(sw.period))"
+
+function metric(sw::SineShiftMetric, x::AbstractVector)
+    x = SVector{4}(x)
+    A = sw.amplitude
+    d = sw.period
+    t, X, y, z = x
+
+    φ = 2 * oftype(X, π) * (X - t) / d
+    C = A * d / (2 * oftype(A, π))
+
+    # Inner coordinates.
+    x_old = SVector(t, X + C * sin(φ), y, z)
+    g_old = metric(sw.metric, x_old)
+
+    # Jacobian J[α, μ] = ∂x̂^α/∂x^μ, column-major (column = derivative
+    # variable); only the x̂ row is non-trivial, with c = A cos φ.
+    c = A * cos(φ)
+    o = one(c)
+    ze = zero(c)
+    J = SMatrix{4,4}(
+        o, -c, ze, ze,
+        ze, 1 + c, ze, ze,
+        ze, ze, o, ze,
+        ze, ze, ze, o,
+    )
+
+    g = J' * g_old * J
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+export SineShift
+"""
+    SineShift(A, d)
+
+Flat Minkowski spacetime in a chart with a time-dependent sinusoidal
+spatial reparametrisation: unit lapse, shift
+`βˣ = −A c/(1 + A c)`, spatial metric `γ_xx = (1 + A c)²` with
+`c = cos(2π(x − t)/d)`. Shorthand for
+`sineshift(Minkowski(), A, d)`; see [`sineshift`](@ref).
+"""
+SineShift(A, d) = sineshift(Minkowski(), A, d)
 
 ################################################################################
 

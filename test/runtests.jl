@@ -333,6 +333,77 @@ end
     end
 end
 
+@testset "SineShift" begin
+    Random.seed!(9)
+
+    A, d = 0.3, 1.0
+    sw = SineShift(A, d)
+    for n in 1:10
+        x = randn(4)
+        c = A * cos(2π * (x[2] - x[1]) / d)
+        g = metric(sw, x)
+        # Flat spacetime in a distorted chart: unit lapse, shift
+        # βˣ = −c/(1+c), spatial metric γ_xx = (1+c)².
+        @test g[2, 2] ≈ (1 + c)^2
+        @test g[1, 2] ≈ -c * (1 + c)
+        @test g[1, 1] ≈ -1 + c^2
+        @test g[3, 3] ≈ 1 && g[4, 4] ≈ 1
+        # Curvature-free (it is Minkowski in disguise).
+        R = RiemannTensor(sw, x)
+        @test isapprox(R, zero(R); atol=1e-10)
+    end
+
+    # Parameter validation.
+    @test_throws ArgumentError sineshift(Minkowski(), 1.5, 1.0)
+    @test_throws ArgumentError sineshift(Minkowski(), 0.5, -1.0)
+end
+
+@testset "adm_decompose" begin
+    Random.seed!(8)
+
+    # Minkowski: α = 1, β = 0, γ = δ.
+    for n in 1:10
+        x = randn(4)
+        α, β, γ = adm_decompose(Minkowski(), x)
+        @test α ≈ 1
+        @test isapprox(β, zero(β); atol=1e-14)
+        @test γ ≈ SMatrix{3,3}(1.0I)
+    end
+
+    # GaugeWave(A, d): ds² = −H dt² + H dx² + dy² + dz²,
+    # H = 1 − A sin(2π(x−t)/d)  ⇒  α = √H, β = 0, γ = diag(H, 1, 1).
+    A, d = 0.1, 1.0
+    gw = GaugeWave(A, d)
+    for n in 1:10
+        x = randn(4)
+        H = 1 - A * sin(2π * (x[2] - x[1]) / d)
+        α, β, γ = adm_decompose(gw, x)
+        @test α ≈ sqrt(H)
+        @test isapprox(β, zero(β); atol=1e-12)
+        @test γ ≈ SMatrix{3,3}(Diagonal(SVector(H, 1.0, 1.0)))
+    end
+
+    # Reconstruction identity on a generic curved metric:
+    # g_tt = −α² + β_k β^k, g_ti = γ_ik β^k, g_ij = γ_ij.
+    ks = KerrSchild(1.0, 0.3)
+    for n in 1:10
+        x = 3 .+ SVector{4}(randn(4))
+        g = metric(ks, x)
+        α, β, γ = adm_decompose(g)
+        βl = γ * β
+        @test g[1, 1] ≈ -α^2 + dot(β, βl)
+        for i in 1:3
+            @test g[1, i + 1] ≈ βl[i]
+            for j in 1:3
+                @test g[i + 1, j + 1] ≈ γ[i, j]
+            end
+        end
+        # Both call paths agree.
+        α2, β2, γ2 = adm_decompose(ks, x)
+        @test (α2, β2, γ2) == (α, β, γ)
+    end
+end
+
 @testset "ExtrinsicCurvature" begin
     Random.seed!(6)
 
