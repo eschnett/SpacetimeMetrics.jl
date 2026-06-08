@@ -358,6 +358,79 @@ end
     @test_throws ArgumentError sineshift(Minkowski(), 0.5, -1.0)
 end
 
+@testset "ShiftedMinkowski" begin
+    Random.seed!(11)
+    A, w = 0.6, 1.0
+    sm = ShiftedMinkowski(A, w)
+    for n in 1:10
+        x = randn(4)
+        ψ′ = A * (1 - tanh(x[2] / w)^2)             # A sech²(x/w)
+        g = metric(sm, x)
+        @test g[1, 1] ≈ -1
+        @test g[1, 2] ≈ -ψ′
+        @test g[2, 2] ≈ 1 - ψ′^2
+        @test g[3, 3] ≈ 1 && g[4, 4] ≈ 1
+        # Minkowski in a skewed chart ⇒ curvature-free.
+        R = RiemannTensor(sm, x)
+        @test isapprox(R, zero(R); atol=1e-10)
+        # Static flat ⇒ ALWAYS subluminal: α² − |β|²_γ = 1 identically.
+        α, β, γ = adm_decompose(g)
+        @test α^2 - β' * γ * β ≈ 1
+        @test β' * γ * β < α^2
+    end
+    @test_throws ArgumentError shiftedminkowski(Minkowski(), 1.5, 1.0)
+    @test_throws ArgumentError shiftedminkowski(Minkowski(), 0.5, -1.0)
+end
+
+@testset "MovingGrid" begin
+    Random.seed!(12)
+    V₀, w, xc = 1.6, 0.5, 0.7
+    mg = MovingGrid(V₀, w, xc)
+    for n in 1:10
+        x = randn(4)
+        Vx = V₀ * (1 - tanh((x[2] - xc) / w)) / 2
+        g = metric(mg, [0.0, x[2], x[3], x[4]])     # t = 0 closed form
+        @test g[1, 1] ≈ Vx^2 - 1
+        @test g[1, 2] ≈ Vx
+        @test g[2, 2] ≈ 1
+        @test g[3, 3] ≈ 1 && g[4, 4] ≈ 1
+        # Exact coordinate transform of Minkowski ⇒ flat at any t.
+        R = RiemannTensor(mg, x)
+        @test isapprox(R, zero(R); atol=1e-9)
+    end
+    # Superluminal (|β|²_γ > α²) where V > 1 (the excision face), subluminal far.
+    α0, β0, γ0 = adm_decompose(mg, [0.0, 0.0, 0.0, 0.0])
+    @test β0' * γ0 * β0 > α0^2
+    αf, βf, γf = adm_decompose(mg, [0.0, 3.0, 0.0, 0.0])
+    @test βf' * γf * βf < αf^2
+    @test_throws ArgumentError movinggrid(Minkowski(), 1.6, -1.0, 0.0)
+end
+
+@testset "gauge_source" begin
+    Random.seed!(13)
+    for m in (MovingGrid(1.6, 0.5, 0.7), ShiftedMinkowski(0.6, 1.0), GaugeWave(0.2, 1.0))
+        for n in 1:5
+            x = randn(4)
+            # H^a = −Γ^a = −g^{bc} Γ^a_{bc}.
+            g, _ = dmetric(m, x); gu = inv(g); Γ = ChristoffelSymbols(m, x)
+            Γup = SVector{4}(sum(gu[b, c] * Γ[a, b, c] for b in 1:4, c in 1:4) for a in 1:4)
+            H = gauge_source(m, x)
+            @test isapprox(H, -Γup; atol=1e-10)
+            # gauge_source_grad: Hl_b = g_{bc} H^c and ∂_a Hl_b (finite-difference).
+            Hl, dHl = gauge_source_grad(m, x)
+            @test isapprox(Hl, g * H; atol=1e-10)
+            for a in 1:4
+                ε = 1e-6
+                xp = collect(x); xp[a] += ε; xm = collect(x); xm[a] -= ε
+                Hlp = metric(m, xp) * gauge_source(m, xp)
+                Hlm = metric(m, xm) * gauge_source(m, xm)
+                fd = (Hlp - Hlm) / 2ε
+                @test isapprox(SVector{4}(dHl[a, b] for b in 1:4), fd; atol=1e-4)
+            end
+        end
+    end
+end
+
 @testset "adm_decompose" begin
     Random.seed!(8)
 

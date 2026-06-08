@@ -573,6 +573,193 @@ SineShift(A, d) = sineshift(Minkowski(), A, d)
 
 ################################################################################
 
+struct ShiftedMinkowskiMetric{T,M} <: AbstractMetric
+    metric::M
+    amplitude::T                # A,  peak |ψ′| (|A|<1); shift is always subluminal
+    width::T                    # w > 0
+end
+
+export shiftedminkowski
+"""
+    shiftedminkowski(m::AbstractMetric, A, w) -> AbstractMetric
+
+Skew the *time* coordinate of `m` by `t̂ = t + ψ(x)`, with the static,
+x-only profile `ψ(x) = A w tanh(x/w)` (so `ψ′(x) = A sech²(x/w)`, localised
+near `x = 0`). The Jacobian `J^α_μ = ∂x̂^α/∂x^μ` has the single off-diagonal
+`∂t̂/∂x = ψ′`; the metric is the pullback `g_{μν} = J^α_μ J^β_ν ĝ_{αβ}`.
+
+For `m = Minkowski()` this is flat with
+
+    g_tt = −1,  g_tx = −ψ′(x),  g_xx = 1 − ψ′(x)²,  g_yy = g_zz = 1,
+
+i.e. `α = 1/√(1−ψ′²)`, `βˣ = −ψ′/(1−ψ′²)`, `γ_xx = 1−ψ′²` (spacelike for
+`|ψ′|<1`, so require `|A|<1`). A flat, **static (x-only)** metric with a
+space-varying shift, but the shift is always **SUBLUMINAL**: `α² − |β|²_γ = 1`
+*identically* (true of any static coordinate transformation of Minkowski —
+`∂_t` stays timelike), so it cannot produce an outflow/excision face. A
+superluminal shift needs curvature or time-dependence (see [`movinggrid`](@ref)).
+NOT harmonic (`□t = −ψ″ ≠ 0` where `ψ′` varies) ⇒ to evolve it as a stationary
+generalized-harmonic solution supply the gauge source [`gauge_source`](@ref).
+"""
+function shiftedminkowski(m::AbstractMetric, A, w)
+    T = promote_type(typeof(A), typeof(w))
+    A, w = T(A), T(w)
+    abs(A) < 1 || throw(ArgumentError("shifted-Minkowski amplitude must satisfy |A| < 1, got A = $A"))
+    w > 0 || throw(ArgumentError("shifted-Minkowski width must satisfy w > 0, got w = $w"))
+    return ShiftedMinkowskiMetric(m, A, w)
+end
+
+Base.nameof(sm::ShiftedMinkowskiMetric) =
+    nameof(sm.metric) * ", shifted Minkowski (A=$(sm.amplitude), w=$(sm.width))"
+
+function metric(sm::ShiftedMinkowskiMetric, x::AbstractVector)
+    x = SVector{4}(x)
+    A = sm.amplitude; w = sm.width
+    t, X, y, z = x
+    th = tanh(X / w)
+    ψ  = A * w * th
+    ψ′ = A * (1 - th^2)                       # A sech²(X/w)
+    x_old = SVector(t + ψ, X, y, z)
+    g_old = metric(sm.metric, x_old)
+    o = one(ψ′); ze = zero(ψ′)
+    # J[α, μ] = ∂x̂^α/∂x^μ, column-major (column = derivative variable);
+    # t̂ = t + ψ(x) ⇒ the only off-diagonal is J[1, 2] = ∂t̂/∂x = ψ′.
+    J = SMatrix{4,4}(
+        o,  ze, ze, ze,
+        ψ′, o,  ze, ze,
+        ze, ze, o,  ze,
+        ze, ze, ze, o,
+    )
+    g = J' * g_old * J
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+export ShiftedMinkowski
+"""
+    ShiftedMinkowski(A, w)
+
+Flat Minkowski in time-skewed coordinates `t̂ = t + A w tanh(x/w)` — a static,
+x-only metric with a space-varying but **subluminal** shift (`α²−|β|²_γ=1`).
+Shorthand for `shiftedminkowski(Minkowski(), A, w)`; see [`shiftedminkowski`](@ref).
+"""
+ShiftedMinkowski(A, w) = shiftedminkowski(Minkowski(), A, w)
+
+export gauge_source
+"""
+    gauge_source(m::AbstractMetric, p::AbstractVector) -> SVector{4}
+
+The generalized-harmonic gauge source `H^a = −Γ^a = −g^{bc} Γ^a_{bc}` (minus the
+contracted Christoffel) at `p`. With this `H^a` the metric satisfies the GH
+gauge/constraint condition `C^a = Γ^a + H^a = 0`, i.e. `m` is a stationary
+solution of the generalized-harmonic system driven by `H^a`. Use it to evolve
+non-harmonic exact solutions (e.g. [`shiftedminkowski`](@ref), Kerr-Schild).
+"""
+function gauge_source(m::AbstractMetric, p::AbstractVector)
+    g, _ = dmetric(m, SVector{4}(p))
+    gu = inv(g)
+    Γ = ChristoffelSymbols(m, p)
+    return SVector{4}(-sum(gu[b, c] * Γ[a, b, c] for b in 1:4, c in 1:4) for a in 1:4)
+end
+
+export gauge_source_grad
+"""
+    gauge_source_grad(m::AbstractMetric, p::AbstractVector) -> (Hl, dHl)
+
+Return the gauge-source one-form lowered, `Hl_b = g_{bc} H^c` with
+`H^c = −Γ^c` (see [`gauge_source`](@ref)), and its gradient
+`dHl[a, b] = ∂_a Hl_b`, both at `p`. The gradient is obtained by forward-mode
+differentiation through `g·gauge_source`; the inner `dmetric`/`ChristoffelSymbols`
+already use a distinct dual tag, so this nests cleanly (cf. [`ddmetric`](@ref)).
+These are exactly the two fields the conservative generalized-harmonic source
+needs to carry a prescribed gauge source `H^a`.
+"""
+function gauge_source_grad(m::AbstractMetric, p::AbstractVector)
+    p = SVector{4}(p)
+    Hlow(q) = metric(m, q) * gauge_source(m, q)        # Hl_b(q) = g_{bc}(q) H^c(q)
+    Hl = Hlow(p)
+    J = ForwardDiff.jacobian(Hlow, p)                  # J[b, a] = ∂Hl_b/∂x^a
+    dHl = SMatrix{4,4}(J[b, a] for a in 1:4, b in 1:4) # dHl[a, b] = ∂_a Hl_b
+    return Hl, dHl
+end
+
+################################################################################
+
+struct MovingGridMetric{T,M} <: AbstractMetric
+    metric::M
+    speed::T                    # V₀, peak grid speed; superluminal where V(x)>1
+    width::T                    # w > 0
+    center::T                   # x_c (transition location)
+end
+
+export movinggrid
+"""
+    movinggrid(m::AbstractMetric, V₀, w, x_c) -> AbstractMetric
+
+Pull `m` back through the **time-dependent** grid map `x̂ = x + t V(x)`,
+`t̂ = t`, with the monotone profile `V(x) = ½ V₀ (1 − tanh((x−x_c)/w))`
+(→ `V₀` as `x → −∞`, → 0 as `x → +∞`). The Jacobian `J^α_μ = ∂x̂^α/∂x^μ` has
+`∂x̂/∂t = V` and `∂x̂/∂x = 1 + t V′`; the metric is `g = Jᵀ ĝ J`.
+
+For `m = Minkowski()` this is flat (an exact coordinate transformation of
+Minkowski) and at `t = 0` reduces to
+
+    g_tt = V(x)² − 1,  g_tx = V(x),  g_xx = 1,  g_yy = g_zz = 1,
+
+so `α = 1`, `βˣ = V(x)`, `γ_xx = 1`, and `α² − |β|²_γ = 1 − V²`: the shift is
+**SUPERLUMINAL** wherever `V(x) > 1` (both wave characteristics `c = −V ± 1 < 0`
+travel in `−x` ⇒ the `−x` face is pure outflow / excision), Minkowski where
+`V → 0`. The constant-`V` case is the classic stable shifted-flat excision test;
+varying `V(x)` exercises the nonlinear (varying-coefficient) source. Being
+time-dependent it is *not* static — linearise at `t = 0`. NOT harmonic ⇒ supply
+[`gauge_source`](@ref)/[`gauge_source_grad`](@ref) to evolve it.
+"""
+function movinggrid(m::AbstractMetric, V₀, w, x_c)
+    T = promote_type(typeof(V₀), typeof(w), typeof(x_c))
+    V₀, w, x_c = T(V₀), T(w), T(x_c)
+    w > 0 || throw(ArgumentError("moving-grid width must satisfy w > 0, got w = $w"))
+    return MovingGridMetric(m, V₀, w, x_c)
+end
+
+Base.nameof(mg::MovingGridMetric) =
+    nameof(mg.metric) * ", moving grid (V₀=$(mg.speed), w=$(mg.width), x_c=$(mg.center))"
+
+function metric(mg::MovingGridMetric, x::AbstractVector)
+    x = SVector{4}(x)
+    V₀ = mg.speed; w = mg.width; xc = mg.center
+    t, X, y, z = x
+    th = tanh((X - xc) / w)
+    V  = V₀ * (1 - th) / 2                     # ½V₀(1−tanh((x−x_c)/w))
+    Vp = -V₀ * (1 - th^2) / (2 * w)            # dV/dX
+    x_old = SVector(t, X + t * V, y, z)
+    g_old = metric(mg.metric, x_old)
+    o = one(V); ze = zero(V)
+    s = 1 + t * Vp                              # ∂x̂/∂x
+    # J[α, μ] = ∂x̂^α/∂x^μ, column-major: col t = (1, V, 0, 0), col x = (0, s, 0, 0).
+    J = SMatrix{4,4}(
+        o,  V,  ze, ze,
+        ze, s,  ze, ze,
+        ze, ze, o,  ze,
+        ze, ze, ze, o,
+    )
+    g = J' * g_old * J
+    g = (g + g') / 2
+    return g::SMatrix{4,4}
+end
+
+export MovingGrid
+"""
+    MovingGrid(V₀, w, x_c)
+
+Flat Minkowski in a faster-than-light moving-grid chart `x̂ = x + t V(x)` with
+`V(x) = ½ V₀ (1 − tanh((x−x_c)/w))` — at `t = 0`, a metric with shift
+`βˣ = V(x)` that is superluminal (outflow `−x` face) where `V > 1`. Shorthand
+for `movinggrid(Minkowski(), V₀, w, x_c)`; see [`movinggrid`](@ref).
+"""
+MovingGrid(V₀, w, x_c) = movinggrid(Minkowski(), V₀, w, x_c)
+
+################################################################################
+
 export Minkowski
 """
     Minkowski()
