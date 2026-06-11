@@ -196,7 +196,7 @@ function ChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     # Symmetrize to cancel round-off errors. NOTE the fresh name: a
     # generator that captures a variable which is REASSIGNED forces the
     # captured variable into a heap Box (classic closure-capture
-    # pitfall) — `Γ = SArray((Γ[…] + Γ[…])/2 …)` allocated ~6 KB/call.
+    # pitfall) — `Γ = SArray((Γ[…] + Γ[…])/2 …)` allocated ~6 kB/call.
     Γs = SArray{Tuple{4,4,4}}((Γ[a, b, c] + Γ[a, c, b]) / 2
                               for a in 1:4, b in 1:4, c in 1:4)
     return Γs
