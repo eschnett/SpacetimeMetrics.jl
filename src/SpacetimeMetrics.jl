@@ -46,6 +46,7 @@ const η = SMatrix{4,4}(-1, 0, 0, 0, 0, +1, 0, 0, 0, 0, +1, 0, 0, 0, 0, +1)
 struct _DMetricTag end
 struct _DDMetricTag end
 struct _DChristoffelTag end
+struct _DGaugeSourceTag end
 
 # Seed an SVector{4} with 4-component dual numbers (one partial per coordinate).
 # When T is itself a Dual (nested call), one(T)/zero(T) produce the right typed values.
@@ -184,13 +185,21 @@ function ChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     # Γ_abc
     Γl = SArray{Tuple{4,4,4}}((dg[a, b, c] + dg[a, c, b] - dg[b, c, a]) / 2 for a in 1:4, b in 1:4, c in 1:4)
 
-    # Γ^a_bc
-    Γ = SArray{Tuple{4,4,4}}(sum(gu[a, x] * Γl[x, b, c] for x in 1:4) for a in 1:4, b in 1:4, c in 1:4)
+    # Γ^a_bc (explicit four-term contraction: a generator-based `sum`
+    # inside the comprehension heap-allocates and is the hot path under
+    # nested dual numbers in gauge_source_grad)
+    Γ = SArray{Tuple{4,4,4}}(
+        gu[a, 1] * Γl[1, b, c] + gu[a, 2] * Γl[2, b, c] +
+        gu[a, 3] * Γl[3, b, c] + gu[a, 4] * Γl[4, b, c]
+        for a in 1:4, b in 1:4, c in 1:4)
 
-    # Symmetrize to cancel round-off errors
-    Γ = SArray{Tuple{4,4,4}}((Γ[a, b, c] + Γ[a, c, b]) / 2 for a in 1:4, b in 1:4, c in 1:4)
-
-    return Γ::SArray{Tuple{4,4,4}}
+    # Symmetrize to cancel round-off errors. NOTE the fresh name: a
+    # generator that captures a variable which is REASSIGNED forces the
+    # captured variable into a heap Box (classic closure-capture
+    # pitfall) — `Γ = SArray((Γ[…] + Γ[…])/2 …)` allocated ~6 KB/call.
+    Γs = SArray{Tuple{4,4,4}}((Γ[a, b, c] + Γ[a, c, b]) / 2
+                              for a in 1:4, b in 1:4, c in 1:4)
+    return Γs
 end
 
 export dChristoffelSymbols
@@ -208,10 +217,11 @@ function dChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     Γ = SArray{Tuple{4,4,4}}(ForwardDiff.value(Γ_dual[a, b, c]) for a in 1:4, b in 1:4, c in 1:4)
     dΓ = SArray{Tuple{4,4,4,4}}(ForwardDiff.partials(Γ_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
-    # Symmetrize to cancel round-off errors
-    dΓ = SArray{Tuple{4,4,4,4}}((dΓ[a, b, c, d] + dΓ[a, c, b, d]) / 2 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
-
-    return Γ::SArray{Tuple{4,4,4}}, dΓ::SArray{Tuple{4,4,4,4}}
+    # Symmetrize to cancel round-off errors (fresh name — see the
+    # closure-capture note in ChristoffelSymbols).
+    dΓs = SArray{Tuple{4,4,4,4}}((dΓ[a, b, c, d] + dΓ[a, c, b, d]) / 2
+                                 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
+    return Γ, dΓs
 end
 
 export RiemannTensor
@@ -233,11 +243,12 @@ function RiemannTensor(m::AbstractMetric, p::AbstractVector)
         a in 1:4, b in 1:4, c in 1:4, d in 1:4
     )
 
-    # (Anti-)symmetrize to cancel round-off errors
+    # (Anti-)symmetrize to cancel round-off errors (fresh name — see
+    # the closure-capture note in ChristoffelSymbols).
     # We should probably apply more symmetries/antisymmetries
-    Rm = SArray{Tuple{4,4,4,4}}((Rm[a, b, c, d] - Rm[a, b, d, c]) / 2 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
-
-    return Rm::SArray{Tuple{4,4,4,4}}
+    Rms = SArray{Tuple{4,4,4,4}}((Rm[a, b, c, d] - Rm[a, b, d, c]) / 2
+                                 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
+    return Rms
 end
 
 export RicciTensor
@@ -659,7 +670,15 @@ function gauge_source(m::AbstractMetric, p::AbstractVector)
     g, _ = dmetric(m, SVector{4}(p))
     gu = inv(g)
     Γ = ChristoffelSymbols(m, p)
-    return SVector{4}(-sum(gu[b, c] * Γ[a, b, c] for b in 1:4, c in 1:4) for a in 1:4)
+    # Explicit accumulation (allocation-free under dual numbers; a
+    # generator-based `sum` heap-allocates here).
+    return SVector{4}(ntuple(Val(4)) do a
+        s = zero(eltype(g))
+        @inbounds for b in 1:4, c in 1:4
+            s += gu[b, c] * Γ[a, b, c]
+        end
+        -s
+    end)
 end
 
 export gauge_source_grad
@@ -676,10 +695,14 @@ needs to carry a prescribed gauge source `H^a`.
 """
 function gauge_source_grad(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
-    Hlow(q) = metric(m, q) * gauge_source(m, q)        # Hl_b(q) = g_{bc}(q) H^c(q)
-    Hl = Hlow(p)
-    J = ForwardDiff.jacobian(Hlow, p)                  # J[b, a] = ∂Hl_b/∂x^a
-    dHl = SMatrix{4,4}(J[b, a] for a in 1:4, b in 1:4) # dHl[a, b] = ∂_a Hl_b
+    # Single dual-number seed through Hl_b(q) = g_{bc}(q) H^c(q), the
+    # same pattern as `dmetric` (allocation-free; ForwardDiff.jacobian's
+    # closure path is not).
+    q = make_dual(p, _DGaugeSourceTag)
+    Hd = metric(m, q) * gauge_source(m, q)
+    Hl = SVector{4}(ForwardDiff.value(Hd[b]) for b in 1:4)
+    dHl = SMatrix{4,4}(ForwardDiff.partials(Hd[b], a)
+                       for a in 1:4, b in 1:4)         # dHl[a, b] = ∂_a Hl_b
     return Hl, dHl
 end
 
