@@ -591,3 +591,51 @@ end
         end
     end
 end
+
+@testset "Spatial Ricci" begin
+    Random.seed!(7)
+
+    # Flat space: the spatial Ricci vanishes.
+    mink = Minkowski()
+    for _ in 1:10
+        x = SVector{4}(randn(4))
+        R3 = SpatialRicciTensor(mink, x)
+        @test isapprox(R3, zero(R3); atol=1.0e-12)
+        @test isapprox(SpatialRicciScalar(mink, x), 0; atol=1.0e-12)
+    end
+
+    # Symmetry of the Ricci tensor on a spinning Kerr-Schild slice.
+    let ks = KerrSchild(1.0, 0.6)
+        for _ in 1:10
+            x = SVector(0.0, (3 .+ randn(3))...)
+            R3 = SpatialRicciTensor(ks, x)
+            @test isapprox(R3, R3'; atol=1.0e-10)
+        end
+    end
+
+    # Vacuum Hamiltonian constraint, cross-checking the spatial Ricci against the
+    # extrinsic curvature (Gauss-Codazzi):  ⁽³⁾R + K² − K_ij K^ij = 0.
+    for (M, a) in ((1.0, 0.0), (1.0, 0.6), (2.0, 1.3))
+        ks = KerrSchild(M, a)
+        for _ in 1:10
+            n̂ = normalize(SVector{3}(randn(3)))
+            r = (3 + 3 * rand()) * M
+            x = SVector(0.0, (r * n̂)...)
+            g = metric(ks, x)
+            γu = inv(SMatrix{3,3}(g[i + 1, j + 1] for i in 1:3, j in 1:3))
+            K = ExtrinsicCurvature(ks, x)
+            R3 = SpatialRicciScalar(ks, x)
+            trK = sum(γu[i, j] * K[i, j] for i in 1:3, j in 1:3)
+            KijKij = sum(γu[i, k] * γu[j, l] * K[i, j] * K[k, l] for i in 1:3, j in 1:3, k in 1:3, l in 1:3)
+            @test isapprox(R3 + trK^2 - KijKij, 0; atol=1.0e-6)
+        end
+    end
+
+    # Allocation-free after warm-up.
+    let ks = KerrSchild(1.0, 0.6), x = SVector(0.0, 3.0, 1.0, 0.5)
+        SpatialRicciTensor(ks, x)
+        SpatialRicciScalar(ks, x)
+        @test (@allocated SpatialRicciTensor(ks, x)) == 0
+        @test (@allocated SpatialRicciScalar(ks, x)) == 0
+    end
+end

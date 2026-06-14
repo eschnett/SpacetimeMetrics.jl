@@ -11,10 +11,27 @@ export AbstractMetric
 
 Supertype for analytic 4-dimensional Lorentzian spacetime metrics.
 
-Conventions throughout the package:
-- spacetime has four dimensions,
-- metric signature is `(-1, +1, +1, +1)`,
-- geometric units, `c = G = 1`.
+# Conventions
+
+These are the standard numerical-relativity conventions (Baumgarte & Shapiro,
+*Numerical Relativity*; MTW/Wald for the 4-curvature). None are nonstandard for NR.
+
+- Four spacetime dimensions; metric signature `(−1, +1, +1, +1)`; units `c = G = 1`.
+- Christoffel symbols (Levi-Civita):
+  `Γ^a_{bc} = ½ g^{ad}(∂_b g_{dc} + ∂_c g_{db} − ∂_d g_{bc})` — see [`ChristoffelSymbols`](@ref).
+- Riemann tensor in the **MTW/Wald** sign, `[∇_c, ∇_d] V^a = R^a_{bcd} V^b`:
+  `R^a_{bcd} = ∂_c Γ^a_{db} − ∂_d Γ^a_{cb} + Γ^a_{ce} Γ^e_{db} − Γ^a_{de} Γ^e_{cb}`
+  — see [`RiemannTensor`](@ref). (Opposite sign to the Landau–Lifshitz/Weinberg family.)
+- Ricci tensor by the first–third trace `R_{ab} = R^c_{acb}` — see [`RicciTensor`](@ref);
+  with the above this gives the Ricci scalar `R > 0` on a sphere and `G_{ab} = 8π T_{ab}`.
+- Extrinsic curvature `K_{ij} = −½ £_n γ_{ij}` (equivalently `K = −∇_a n^a`) — see
+  [`ExtrinsicCurvature`](@ref). This is the **NR/ADM** sign; some GR texts (e.g. Wald)
+  use the opposite sign `+½ £_n γ_{ij}`.
+- Spatial 3-curvature [`SpatialRicciTensor`](@ref)/[`SpatialRicciScalar`](@ref) uses the
+  same conventions on the slice, so `⁽³⁾R + K² − K_{ij}K^{ij} = 16π ρ` (Hamiltonian constraint).
+
+The one quantity with no single NR standard is the generalized-harmonic gauge source,
+defined here as `H^a = −Γ^a` (see [`gauge_source`](@ref)).
 
 Concrete subtypes must implement [`metric`](@ref) and `Base.nameof`.
 """
@@ -47,6 +64,7 @@ struct _DMetricTag end
 struct _DDMetricTag end
 struct _DChristoffelTag end
 struct _DGaugeSourceTag end
+struct _DSpatialChristoffelTag end
 
 # Seed an SVector{4} with 4-component dual numbers (one partial per coordinate).
 # When T is itself a Dual (nested call), one(T)/zero(T) produce the right typed values.
@@ -236,8 +254,8 @@ Antisymmetric in the last pair `(c, d)`.
 function RiemannTensor(m::AbstractMetric, p::AbstractVector)
     Γ, dΓ = dChristoffelSymbols(m, p)
 
-    # R^a_bcd
-    # TODO: Check the sign convention!
+    # R^a_bcd in the MTW/Wald sign convention, [∇_c, ∇_d] V^a = R^a_{bcd} V^b
+    # (verified: standard NR convention — see the `AbstractMetric` docstring).
     Rm = SArray{Tuple{4,4,4,4}}(
         dΓ[a, d, b, c] - dΓ[a, c, b, d] + sum(Γ[a, c, x] * Γ[x, d, b] - Γ[a, d, x] * Γ[x, c, b] for x in 1:4) for
         a in 1:4, b in 1:4, c in 1:4, d in 1:4
@@ -261,8 +279,8 @@ the trace of the Riemann tensor over the first and third indices. Symmetric.
 function RicciTensor(m::AbstractMetric, p::AbstractVector)
     Rm = RiemannTensor(m, p)
 
-    # R_ab
-    # TODO: Check the sign convention!
+    # R_ab = R^x_{axb}, the first–third trace (verified: standard NR convention,
+    # Ricci scalar > 0 on a sphere — see the `AbstractMetric` docstring).
     Rc = SArray{Tuple{4,4}}(sum(Rm[x, a, x, b] for x in 1:4) for a in 1:4, b in 1:4)
 
     # Symmetrize to cancel round-off errors
@@ -292,6 +310,92 @@ function EinsteinTensor(m::AbstractMetric, p::AbstractVector)
     G = (G + G') / 2
 
     return G::SMatrix{4,4}
+end
+
+# Christoffel symbols Γ^a_{bc} of the spatial 3-metric γ_{ij} = g_{i+1,j+1} on the
+# constant-t slice (spatial indices only). Spatial analogue of the block used inside
+# ExtrinsicCurvature; computed from the spatial derivatives of the 4-metric.
+function _spatial_christoffel(m::AbstractMetric, p::AbstractVector)
+    g, dg = dmetric(m, p)
+    γu = inv(SMatrix{3,3}(g[i + 1, j + 1] for i in 1:3, j in 1:3))
+    dγ = SArray{Tuple{3,3,3}}(dg[i + 1, j + 1, k + 1] for i in 1:3, j in 1:3, k in 1:3)  # ∂_k γ_ij
+    Γl = SArray{Tuple{3,3,3}}((dγ[a, b, c] + dγ[a, c, b] - dγ[b, c, a]) / 2 for a in 1:3, b in 1:3, c in 1:3)
+    Γ = SArray{Tuple{3,3,3}}(
+        γu[a, 1] * Γl[1, b, c] + γu[a, 2] * Γl[2, b, c] + γu[a, 3] * Γl[3, b, c] for a in 1:3, b in 1:3, c in 1:3
+    )
+    # Symmetrize the lower pair to cancel round-off (fresh name — closure-capture pitfall).
+    Γs = SArray{Tuple{3,3,3}}((Γ[a, b, c] + Γ[a, c, b]) / 2 for a in 1:3, b in 1:3, c in 1:3)
+    return Γs
+end
+
+# Spatial Christoffel symbols Γ^a_{bc} and their spatial derivatives ∂_d Γ^a_{bc}.
+# Like dChristoffelSymbols, but 3D and differentiating only along the slice: the dual
+# seed covers all four coordinates and we keep the three spatial partials (skip ∂_t).
+function _d_spatial_christoffel(m::AbstractMetric, p::AbstractVector)
+    p = SVector{4}(p)
+    Γ_dual = _spatial_christoffel(m, make_dual(p, _DSpatialChristoffelTag))
+    Γ = SArray{Tuple{3,3,3}}(ForwardDiff.value(Γ_dual[a, b, c]) for a in 1:3, b in 1:3, c in 1:3)
+    dΓ = SArray{Tuple{3,3,3,3}}(
+        ForwardDiff.partials(Γ_dual[a, b, c], d + 1) for a in 1:3, b in 1:3, c in 1:3, d in 1:3
+    )
+    # Symmetrize the lower pair (fresh name — closure-capture pitfall).
+    dΓs = SArray{Tuple{3,3,3,3}}((dΓ[a, b, c, d] + dΓ[a, c, b, d]) / 2 for a in 1:3, b in 1:3, c in 1:3, d in 1:3)
+    return Γ, dΓs
+end
+
+export SpatialRicciTensor
+"""
+    SpatialRicciTensor(m::AbstractMetric, p::AbstractVector) -> R3
+
+Return the Ricci tensor `R3[i, j] = ⁽³⁾R_{ij}` of the spatial 3-metric `γ_{ij}`
+induced on the constant-`t` slice through the 4-position `p` — the *intrinsic*
+Ricci tensor of `γ` (spatial covariant derivatives only), the spatial analogue of
+[`ExtrinsicCurvature`](@ref). Symmetric in `(i, j)`.
+
+This is the **standard NR / Baumgarte–Shapiro** spatial Ricci: the same sign and
+first–third trace convention as the 4-Ricci [`RicciTensor`](@ref), restricted to the
+slice — `⁽³⁾R_{ij} = ⁽³⁾R^k_{ikj}`, so `⁽³⁾R > 0` on a sphere. BS do not use a separate
+3D convention; it is the literal 3D restriction of the 4-curvature formulas. With
+[`ExtrinsicCurvature`](@ref) (`K = −½ £_n γ`) it gives the Hamiltonian-constraint
+combination `⁽³⁾R + K² − K_{ij}K^{ij}` (`= 16π ρ`, hence `0` in vacuum).
+"""
+function SpatialRicciTensor(m::AbstractMetric, p::AbstractVector)
+    Γ, dΓ = _d_spatial_christoffel(m, p)
+
+    # ⁽³⁾R^a_bcd (same index convention as RiemannTensor). Explicit 3-term contraction
+    # rather than a `sum` generator, which heap-allocates under nested dual numbers.
+    Rm = SArray{Tuple{3,3,3,3}}(
+        dΓ[a, d, b, c] - dΓ[a, c, b, d] +
+        Γ[a, c, 1] * Γ[1, d, b] - Γ[a, d, 1] * Γ[1, c, b] +
+        Γ[a, c, 2] * Γ[2, d, b] - Γ[a, d, 2] * Γ[2, c, b] +
+        Γ[a, c, 3] * Γ[3, d, b] - Γ[a, d, 3] * Γ[3, c, b]
+        for a in 1:3, b in 1:3, c in 1:3, d in 1:3
+    )
+
+    # Antisymmetrize the last pair to cancel round-off (fresh name — closure-capture pitfall).
+    Rms = SArray{Tuple{3,3,3,3}}((Rm[a, b, c, d] - Rm[a, b, d, c]) / 2 for a in 1:3, b in 1:3, c in 1:3, d in 1:3)
+
+    # R_ij = ⁽³⁾R^x_{ixj}, explicit contraction (allocation-free).
+    R3 = SMatrix{3,3}(Rms[1, a, 1, b] + Rms[2, a, 2, b] + Rms[3, a, 3, b] for a in 1:3, b in 1:3)
+
+    # Symmetrize to cancel round-off errors
+    R3 = (R3 + R3') / 2
+
+    return R3::SMatrix{3,3}
+end
+
+export SpatialRicciScalar
+"""
+    SpatialRicciScalar(m::AbstractMetric, p::AbstractVector) -> R
+
+Return the spatial Ricci scalar `⁽³⁾R = γ^{ij} ⁽³⁾R_{ij}` on the constant-`t` slice
+through `p` (the trace of [`SpatialRicciTensor`](@ref) with the spatial metric).
+"""
+function SpatialRicciScalar(m::AbstractMetric, p::AbstractVector)
+    g = metric(m, SVector{4}(p))
+    γu = inv(SMatrix{3,3}(g[i + 1, j + 1] for i in 1:3, j in 1:3))
+    R3 = SpatialRicciTensor(m, p)
+    return dot(γu, R3)          # γ^{ij} ⁽³⁾R_{ij}, allocation-free
 end
 
 ################################################################################

@@ -1,6 +1,6 @@
 name = "SpacetimeMetrics"
 uuid = "77e61b41-605e-43a6-b70f-04b7dcd1f572"
-version = "1.5.1"
+version = "1.6.0"
 authors = ["Erik Schnetter <schnetter@gmail.com>"]
 
 [deps]
