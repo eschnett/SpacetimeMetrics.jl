@@ -471,9 +471,13 @@ end
                 @test g[i + 1, j + 1] ≈ γ[i, j]
             end
         end
-        # Both call paths agree.
+        # Both call paths agree (up to floating-point reproducibility: the
+        # two paths can contract to slightly different FMA sequences on some
+        # Julia/LLVM versions, so compare with ≈ rather than bit-exact ==).
         α2, β2, γ2 = adm_decompose(ks, x)
-        @test (α2, β2, γ2) == (α, β, γ)
+        @test α2 ≈ α
+        @test β2 ≈ β
+        @test γ2 ≈ γ
     end
 end
 
@@ -631,11 +635,16 @@ end
         end
     end
 
-    # Allocation-free after warm-up.
+    # Allocation-free after warm-up. Measure through a function barrier:
+    # `@allocated expr` in a top-level/`let` scope also counts allocations from
+    # the call's own (de)specialization, which is nonzero on Julia 1.10/1.11
+    # even though the callee allocates nothing. A function barrier isolates the
+    # real per-call allocation (0 on 1.10/1.11/1.12).
     let ks = KerrSchild(1.0, 0.6), x = SVector(0.0, 3.0, 1.0, 0.5)
-        SpatialRicciTensor(ks, x)
-        SpatialRicciScalar(ks, x)
-        @test (@allocated SpatialRicciTensor(ks, x)) == 0
-        @test (@allocated SpatialRicciScalar(ks, x)) == 0
+        measure(f, m, p) = @allocated f(m, p)
+        measure(SpatialRicciTensor, ks, x)   # warm up
+        measure(SpatialRicciScalar, ks, x)
+        @test measure(SpatialRicciTensor, ks, x) == 0
+        @test measure(SpatialRicciScalar, ks, x) == 0
     end
 end
