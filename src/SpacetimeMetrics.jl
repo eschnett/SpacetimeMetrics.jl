@@ -117,10 +117,11 @@ function ddmetric(m::AbstractMetric, p::AbstractVector)
     dg = SArray{Tuple{4,4,4}}(ForwardDiff.partials(g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
     ddg = SArray{Tuple{4,4,4,4}}(ForwardDiff.partials(dg_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
-    # Symmetrize to cancel round-off errors
-    ddg = SArray{Tuple{4,4,4,4}}((ddg[a, b, c, d] + ddg[a, b, d, c]) / 2 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
+    # Symmetrize to cancel round-off errors (fresh name — see the
+    # closure-capture note in ChristoffelSymbols).
+    ddgs = SArray{Tuple{4,4,4,4}}((ddg[a, b, c, d] + ddg[a, b, d, c]) / 2 for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
-    return g, dg, ddg
+    return g, dg, ddgs
 end
 
 export adm_decompose
@@ -152,40 +153,58 @@ adm_decompose(m::AbstractMetric, p::AbstractVector) =
 export ExtrinsicCurvature
 """
     ExtrinsicCurvature(m::AbstractMetric, p::AbstractVector) -> K
+    ExtrinsicCurvature(g::SMatrix{4,4}, dg::SArray{Tuple{4,4,4}}) -> K
 
 Return the extrinsic curvature `K_{ij}` of the constant-`t` slice through the
 4-position `p`, in the 3+1 ADM decomposition of [`metric`](@ref):
 `K_{ij} = -(1/(2α)) (∂_t γ_{ij} − D_i β_j − D_j β_i)`,
 where `γ_{ij} = g_{ij}`, `β_i = g_{ti}`, `α = √(−g_{tt} + β^i β_i)`, and `D`
 is the Levi-Civita connection of `γ`. Symmetric in `(i, j)`.
+
+The second method takes the metric `g_{ab}` and its first derivative
+`dg[a, b, c] = ∂_c g_{ab}` directly, e.g. the result of [`dmetric`](@ref), so
+that a caller who already holds them need not differentiate the metric again:
+`ExtrinsicCurvature(m, p) == ExtrinsicCurvature(dmetric(m, p)...)`.
+Both methods are allocation-free and generic in the element type.
 """
 function ExtrinsicCurvature(m::AbstractMetric, p::AbstractVector)
-    g, dg = dmetric(m, p)
+    return ExtrinsicCurvature(dmetric(m, p)...)
+end
 
+function ExtrinsicCurvature(g::SMatrix{4,4}, dg::SArray{Tuple{4,4,4}})
     α, β, γ = adm_decompose(g)
     γu = inv(γ)
     βl = SVector{3}(g[2, 1], g[3, 1], g[4, 1])
 
-    dtγ = dg[2:4, 2:4, 1]
-    dγ = dg[2:4, 2:4, 2:4]
+    # Index the 4D arrays with explicit offsets rather than slicing: a
+    # `dg[2:4, 2:4, 1]` slice with dynamic ranges returns a heap `Array`.
+    # ∂_t γ_ij
+    dtγ = SMatrix{3,3}(dg[i + 1, j + 1, 1] for i in 1:3, j in 1:3)
+    # ∂_k γ_ij
+    dγ = SArray{Tuple{3,3,3}}(dg[i + 1, j + 1, k + 1] for i in 1:3, j in 1:3, k in 1:3)
     # dβl[i, j] = ∂_j βl_i = ∂_j g_{i+1, 1}
     dβl = SMatrix{3,3}(dg[i + 1, 1, j + 1] for i in 1:3, j in 1:3)
 
     # Γ_abc (spatial)
     Γl = SArray{Tuple{3,3,3}}((dγ[a, b, c] + dγ[a, c, b] - dγ[b, c, a]) / 2 for a in 1:3, b in 1:3, c in 1:3)
 
-    # Γ^a_bc (spatial)
-    Γ = SArray{Tuple{3,3,3}}(sum(γu[a, x] * Γl[x, b, c] for x in 1:3) for a in 1:3, b in 1:3, c in 1:3)
+    # Γ^a_bc (spatial; explicit contraction — a `sum` generator inside the
+    # comprehension heap-allocates)
+    Γ = SArray{Tuple{3,3,3}}(
+        γu[a, 1] * Γl[1, b, c] + γu[a, 2] * Γl[2, b, c] + γu[a, 3] * Γl[3, b, c] for a in 1:3, b in 1:3, c in 1:3
+    )
 
     # D_i β_j + D_j β_i = ∂_i β_j + ∂_j β_i − 2 Γ^k_{ij} β_k (covariant shift)
     K = SMatrix{3,3}(
-        (dtγ[i, j] - dβl[i, j] - dβl[j, i] + 2 * sum(Γ[x, i, j] * βl[x] for x in 1:3)) / (-2α) for i in 1:3, j in 1:3
+        (dtγ[i, j] - dβl[i, j] - dβl[j, i] + 2 * (Γ[1, i, j] * βl[1] + Γ[2, i, j] * βl[2] + Γ[3, i, j] * βl[3])) /
+        (-2α) for i in 1:3, j in 1:3
     )
 
-    # Symmetrize to cancel round-off errors
-    K = (K + K') / 2
+    # Symmetrize to cancel round-off errors (fresh name — see the
+    # closure-capture note in ChristoffelSymbols).
+    Ks = (K + K') / 2
 
-    return K::SMatrix{3,3}
+    return Ks::SMatrix{3,3}
 end
 
 export ChristoffelSymbols
