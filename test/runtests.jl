@@ -1,3 +1,4 @@
+using ForwardDiff
 using LinearAlgebra
 using Random
 using SpacetimeMetrics
@@ -556,6 +557,40 @@ end
             @test isapprox(K, K_analytic; atol=1e-12)
         end
     end
+
+    # The (g, dg) method agrees bit for bit with the (m, p) method.
+    for m in (KerrSchild(1.0, 0.5), boost(KerrSchild(1.0, 0.5), [0.3, -0.2, 0.1]), GaugeWave(0.3, 1.2))
+        for n in 1:10
+            x = SVector(randn(), (3 .+ randn(3))...)
+            @test ExtrinsicCurvature(m, x) === ExtrinsicCurvature(dmetric(m, x)...)
+        end
+    end
+
+    # Generic in the element type: differentiate K through dual numbers along
+    # a direction in spacetime and compare to a finite difference. The (g, dg)
+    # method then receives dual-valued g and dg.
+    let ks = KerrSchild(1.0, 0.5), x = SVector(0.0, 3.0, 1.0, 0.5), v = SVector(0.3, -0.5, 0.2, 0.7), ε = 1.0e-6
+        Kf(s) = ExtrinsicCurvature(ks, x + s * v)
+        Kg(s) = ExtrinsicCurvature(dmetric(ks, x + s * v)...)
+        dK_fd = (Kf(ε) - Kf(-ε)) / (2ε)
+        @test isapprox(ForwardDiff.derivative(Kf, 0.0), dK_fd; atol=1.0e-8)
+        @test ForwardDiff.derivative(Kg, 0.0) === ForwardDiff.derivative(Kf, 0.0)
+    end
+
+    # Allocation-free after warm-up, for both methods (function barrier; see
+    # the note in the "Spatial Ricci" testset).
+    for T in (Float64, Float32)
+        ks = KerrSchild(T(1), T(0.5))
+        x = SVector{4,T}(0, 3, 1, 0.5)
+        g, dg = dmetric(ks, x)
+        measure(f, a, b) = @allocated f(a, b)
+        measure(ExtrinsicCurvature, ks, x)   # warm up
+        measure(ExtrinsicCurvature, g, dg)
+        @test measure(ExtrinsicCurvature, ks, x) == 0
+        @test measure(ExtrinsicCurvature, g, dg) == 0
+        @test isbits(ExtrinsicCurvature(g, dg))
+        @test eltype(ExtrinsicCurvature(g, dg)) === T
+    end
 end
 
 @testset "Derivatives" begin
@@ -593,6 +628,16 @@ end
 
             @test isapprox(dg0, dg1)
         end
+    end
+
+    # Allocation-free after warm-up (function barrier; see the note in the
+    # "Spatial Ricci" testset).
+    let ks = KerrSchild(1.0, 0.5), x = SVector(0.0, 3.0, 1.0, 0.5)
+        measure(f, m, p) = @allocated f(m, p)
+        measure(dmetric, ks, x)   # warm up
+        measure(ddmetric, ks, x)
+        @test measure(dmetric, ks, x) == 0
+        @test measure(ddmetric, ks, x) == 0
     end
 end
 
