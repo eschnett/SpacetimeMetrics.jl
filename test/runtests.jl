@@ -645,28 +645,34 @@ end
     # Derivatives with respect to the metric *parameters*: the metric carries
     # the user's dual numbers while the position does not, so the internal AD
     # passes must nest inside the user's ForwardDiff tag.
+    #
+    # Cases that nest three dual layers (the user's tag, an outer internal
+    # pass, and dmetric) generate very large code; compiling them all exhausts
+    # LLVM's memory on 32-bit systems, so they run on 64-bit systems only.
+    full = Sys.WORD_SIZE == 64
     x = SVector(0.0, 3.0, 1.0, 0.5)
     M0 = 1.0
     epsilon = 1.0e-5
     ks(M) = KerrSchild(M, 0.5)
-    for f in (M -> dmetric(ks(M), x)[2],
-              M -> ddmetric(ks(M), x)[3],
-              M -> ExtrinsicCurvature(ks(M), x),
-              M -> ChristoffelSymbols(ks(M), x),
-              M -> dChristoffelSymbols(ks(M), x)[2],
-              M -> SpatialRicciTensor(ks(M), x),
-              M -> gauge_source_grad(ks(M), x)[2])
+    fs = (M -> dmetric(ks(M), x)[2],
+          M -> ExtrinsicCurvature(ks(M), x),
+          M -> ChristoffelSymbols(ks(M), x))
+    fs3 = (M -> ddmetric(ks(M), x)[3],
+           M -> dChristoffelSymbols(ks(M), x)[2],
+           M -> SpatialRicciTensor(ks(M), x),
+           M -> gauge_source_grad(ks(M), x)[2])
+    for f in (full ? (fs..., fs3...) : fs)
         d_ad = ForwardDiff.derivative(f, M0)
         d_fd = (f(M0 + epsilon) - f(M0 - epsilon)) / (2 * epsilon)
         @test isapprox(d_ad, d_fd; rtol=1.0e-7, atol=1.0e-9)
         @test any(!iszero, d_ad)
     end
     # Kerr is vacuum, so its Ricci tensor vanishes for every mass ...
-    let d_ad = ForwardDiff.derivative(M -> RicciTensor(ks(M), x), M0)
+    full && let d_ad = ForwardDiff.derivative(M -> RicciTensor(ks(M), x), M0)
         @test isapprox(d_ad, zero(d_ad); atol=1.0e-10)
     end
     # ... while charged Kerr-Newman has a nonzero, mass-dependent Ricci tensor.
-    let f = M -> RicciTensor(Harmonic(M, 0.5, 0.3), x)
+    full && let f = M -> RicciTensor(Harmonic(M, 0.5, 0.3), x)
         d_ad = ForwardDiff.derivative(f, M0)
         d_fd = (f(M0 + epsilon) - f(M0 - epsilon)) / (2 * epsilon)
         @test isapprox(d_ad, d_fd; rtol=1.0e-6, atol=1.0e-10)
@@ -676,10 +682,11 @@ end
     # Derivatives with respect to the position still work: the position
     # carries the user's dual numbers.
     let m = ks(M0), dx = SVector(0.3, -0.2, 0.5, 0.1)
-        for f in (t -> dmetric(m, x + t * dx)[2],
-                  t -> ddmetric(m, x + t * dx)[3],
-                  t -> ChristoffelSymbols(m, x + t * dx),
-                  t -> SpatialRicciTensor(m, x + t * dx))
+        gs = (t -> dmetric(m, x + t * dx)[2],
+              t -> ChristoffelSymbols(m, x + t * dx))
+        gs3 = (t -> ddmetric(m, x + t * dx)[3],
+               t -> SpatialRicciTensor(m, x + t * dx))
+        for f in (full ? (gs..., gs3...) : gs)
             d_ad = ForwardDiff.derivative(f, 0.0)
             d_fd = (f(epsilon) - f(-epsilon)) / (2 * epsilon)
             @test isapprox(d_ad, d_fd; rtol=1.0e-7, atol=1.0e-9)
@@ -695,9 +702,10 @@ end
     let measure(f, m, p) = @allocated f(m, p)
         Tag = typeof(ForwardDiff.Tag(identity, Float64))
         Md = ForwardDiff.Dual{Tag}(M0, one(M0))
-        for m in (ks(M0), ks(Md))
-            for f in (dmetric, ddmetric, ChristoffelSymbols, dChristoffelSymbols, RicciTensor,
-                      gauge_source_grad, SpatialRicciTensor)
+        light = (dmetric, ChristoffelSymbols)
+        heavy = (ddmetric, dChristoffelSymbols, RicciTensor, gauge_source_grad, SpatialRicciTensor)
+        for (m, fns) in ((ks(M0), (light..., heavy...)), (ks(Md), full ? (light..., heavy...) : light))
+            for f in fns
                 measure(f, m, x)   # warm up
                 @test measure(f, m, x) == 0
             end
