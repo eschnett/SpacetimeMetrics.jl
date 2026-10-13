@@ -23,6 +23,15 @@ Geometry:
 - first and second derivatives of the metric
 - Christoffel symbols
 - Riemmann tensor, Ricci tensor, Einstein tensor
+- all of these can be differentiated with ForwardDiff, with respect to the
+  position or to the metric parameters
+
+## Requirements
+
+Julia 1.11 or later. Julia 1.10 is not supported: its compiler is
+extremely slow on the nested dual-number types used for second derivatives
+and for differentiating with respect to metric parameters (tens of minutes
+for a single call).
 
 ## Example
 

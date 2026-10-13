@@ -641,6 +641,70 @@ end
     end
 end
 
+@testset "Differentiating through the AD passes" begin
+    # Derivatives with respect to the metric *parameters*: the metric carries
+    # the user's dual numbers while the position does not, so the internal AD
+    # passes must nest inside the user's ForwardDiff tag.
+    x = SVector(0.0, 3.0, 1.0, 0.5)
+    M0 = 1.0
+    epsilon = 1.0e-5
+    ks(M) = KerrSchild(M, 0.5)
+    for f in (M -> dmetric(ks(M), x)[2],
+              M -> ddmetric(ks(M), x)[3],
+              M -> ExtrinsicCurvature(ks(M), x),
+              M -> ChristoffelSymbols(ks(M), x),
+              M -> dChristoffelSymbols(ks(M), x)[2],
+              M -> SpatialRicciTensor(ks(M), x),
+              M -> gauge_source_grad(ks(M), x)[2])
+        d_ad = ForwardDiff.derivative(f, M0)
+        d_fd = (f(M0 + epsilon) - f(M0 - epsilon)) / (2 * epsilon)
+        @test isapprox(d_ad, d_fd; rtol=1.0e-7, atol=1.0e-9)
+        @test any(!iszero, d_ad)
+    end
+    # Kerr is vacuum, so its Ricci tensor vanishes for every mass ...
+    let d_ad = ForwardDiff.derivative(M -> RicciTensor(ks(M), x), M0)
+        @test isapprox(d_ad, zero(d_ad); atol=1.0e-10)
+    end
+    # ... while charged Kerr-Newman has a nonzero, mass-dependent Ricci tensor.
+    let f = M -> RicciTensor(Harmonic(M, 0.5, 0.3), x)
+        d_ad = ForwardDiff.derivative(f, M0)
+        d_fd = (f(M0 + epsilon) - f(M0 - epsilon)) / (2 * epsilon)
+        @test isapprox(d_ad, d_fd; rtol=1.0e-6, atol=1.0e-10)
+        @test any(!iszero, d_ad)
+    end
+
+    # Derivatives with respect to the position still work: the position
+    # carries the user's dual numbers.
+    let m = ks(M0), dx = SVector(0.3, -0.2, 0.5, 0.1)
+        for f in (t -> dmetric(m, x + t * dx)[2],
+                  t -> ddmetric(m, x + t * dx)[3],
+                  t -> ChristoffelSymbols(m, x + t * dx),
+                  t -> SpatialRicciTensor(m, x + t * dx))
+            d_ad = ForwardDiff.derivative(f, 0.0)
+            d_fd = (f(epsilon) - f(-epsilon)) / (2 * epsilon)
+            @test isapprox(d_ad, d_fd; rtol=1.0e-7, atol=1.0e-9)
+        end
+        # The ForwardDiff Jacobian of the Christoffel symbols matches dChristoffelSymbols.
+        _, dΓ = dChristoffelSymbols(m, x)
+        J = ForwardDiff.jacobian(q -> vec(ChristoffelSymbols(m, q)), x)
+        @test isapprox(reshape(J, 4, 4, 4, 4), dΓ; rtol=1.0e-12, atol=1.0e-12)
+    end
+
+    # Allocation-free after warm-up, for plain and dual-valued metric
+    # parameters (function barrier: see the note in "Spatial Ricci").
+    let measure(f, m, p) = @allocated f(m, p)
+        Tag = typeof(ForwardDiff.Tag(identity, Float64))
+        Md = ForwardDiff.Dual{Tag}(M0, one(M0))
+        for m in (ks(M0), ks(Md))
+            for f in (dmetric, ddmetric, ChristoffelSymbols, dChristoffelSymbols, RicciTensor,
+                      gauge_source_grad, SpatialRicciTensor)
+                measure(f, m, x)   # warm up
+                @test measure(f, m, x) == 0
+            end
+        end
+    end
+end
+
 @testset "Spatial Ricci" begin
     Random.seed!(7)
 

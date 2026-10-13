@@ -59,16 +59,31 @@ const η = SMatrix{4,4}(-1, 0, 0, 0, 0, +1, 0, 0, 0, 0, +1, 0, 0, 0, 0, +1)
 
 # Derivatives
 
-# Tags for non-allocating AD passes — one per differentiation level
+# Tag kinds for non-allocating AD passes — one per differentiation level
 struct _DMetricTag end
 struct _DDMetricTag end
 struct _DChristoffelTag end
 struct _DGaugeSourceTag end
 struct _DSpatialChristoffelTag end
 
+# The ordered ForwardDiff tag for one internal AD pass. ForwardDiff can only
+# order two different dual tags if both are `ForwardDiff.Tag`s (via their
+# creation count). Keying the tag on the argument types makes it a fresh tag,
+# created after any tag already carried by `m` or `p` (e.g. a user's
+# `ForwardDiff.derivative` with respect to the metric parameters, or an outer
+# internal pass), so our pass always nests inside. Extract results with the
+# tag-aware `_value(tag, x)` / `_partials(tag, x, i)`.
+#
+# The tag is passed around as a (singleton) instance rather than as a type:
+# a generator that captures a local variable holding a type stores it as a
+# `DataType` field, which loses specialization and allocates (seen on Julia 1.10).
+@inline _ad_tag(kind, m, p) = ForwardDiff.Tag(kind, Tuple{typeof(m),eltype(p)})
+@inline _value(tag::ForwardDiff.Tag, x) = ForwardDiff.value(typeof(tag), x)
+@inline _partials(tag::ForwardDiff.Tag, x, i) = ForwardDiff.partials(typeof(tag), x, i)
+
 # Seed an SVector{4} with 4-component dual numbers (one partial per coordinate).
 # When T is itself a Dual (nested call), one(T)/zero(T) produce the right typed values.
-@inline function make_dual(p::SVector{4,T}, ::Type{Tag}) where {T,Tag}
+@inline function make_dual(p::SVector{4,T}, ::Tag) where {T,Tag<:ForwardDiff.Tag}
     z, o = zero(T), one(T)
     SVector(
         ForwardDiff.Dual{Tag}(p[1], o, z, z, z),
@@ -93,9 +108,10 @@ seed; allocation-free and GPU-friendly.
 """
 function dmetric(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
-    g_dual = metric(m, make_dual(p, _DMetricTag))
-    g = SMatrix{4,4}(ForwardDiff.value(g_dual[a, b]) for a in 1:4, b in 1:4)
-    dg = SArray{Tuple{4,4,4}}(ForwardDiff.partials(g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
+    tag = _ad_tag(_DMetricTag(), m, p)
+    g_dual = metric(m, make_dual(p, tag))
+    g = SMatrix{4,4}(_value(tag, g_dual[a, b]) for a in 1:4, b in 1:4)
+    dg = SArray{Tuple{4,4,4}}(_partials(tag, g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
     return g, dg
 end
 
@@ -110,12 +126,13 @@ and its second derivative `ddg[a, b, c, d] = ∂_d ∂_c g_{ab}` at the 4-positi
 """
 function ddmetric(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
-    # dmetric returns (g_dual, dg_dual) with Dual{_DDMetricTag,T,4} elements;
-    # inside dmetric a second Dual{_DMetricTag,...} layer is added — dual-of-dual.
-    g_dual, dg_dual = dmetric(m, make_dual(p, _DDMetricTag))
-    g = SMatrix{4,4}(ForwardDiff.value(g_dual[a, b]) for a in 1:4, b in 1:4)
-    dg = SArray{Tuple{4,4,4}}(ForwardDiff.partials(g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
-    ddg = SArray{Tuple{4,4,4,4}}(ForwardDiff.partials(dg_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
+    # dmetric returns (g_dual, dg_dual) with Dual{typeof(tag),T,4} elements; inside
+    # dmetric a second, later-created tag layer is added — dual-of-dual.
+    tag = _ad_tag(_DDMetricTag(), m, p)
+    g_dual, dg_dual = dmetric(m, make_dual(p, tag))
+    g = SMatrix{4,4}(_value(tag, g_dual[a, b]) for a in 1:4, b in 1:4)
+    dg = SArray{Tuple{4,4,4}}(_partials(tag, g_dual[a, b], c) for a in 1:4, b in 1:4, c in 1:4)
+    ddg = SArray{Tuple{4,4,4,4}}(_partials(tag, dg_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
     # Symmetrize to cancel round-off errors (fresh name — see the
     # closure-capture note in ChristoffelSymbols).
@@ -249,10 +266,11 @@ coordinate derivative `dΓ[a, b, c, d] = ∂_d Γ^a_{bc}` at the 4-position `p`.
 function dChristoffelSymbols(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
     # ChristoffelSymbols calls dmetric internally, so this naturally composes to
-    # dual-of-dual: _DChristoffelTag outer, _DMetricTag inner.
-    Γ_dual = ChristoffelSymbols(m, make_dual(p, _DChristoffelTag))
-    Γ = SArray{Tuple{4,4,4}}(ForwardDiff.value(Γ_dual[a, b, c]) for a in 1:4, b in 1:4, c in 1:4)
-    dΓ = SArray{Tuple{4,4,4,4}}(ForwardDiff.partials(Γ_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
+    # dual-of-dual: this pass's tag on the outside, dmetric's (later-created) tag inside.
+    tag = _ad_tag(_DChristoffelTag(), m, p)
+    Γ_dual = ChristoffelSymbols(m, make_dual(p, tag))
+    Γ = SArray{Tuple{4,4,4}}(_value(tag, Γ_dual[a, b, c]) for a in 1:4, b in 1:4, c in 1:4)
+    dΓ = SArray{Tuple{4,4,4,4}}(_partials(tag, Γ_dual[a, b, c], d) for a in 1:4, b in 1:4, c in 1:4, d in 1:4)
 
     # Symmetrize to cancel round-off errors (fresh name — see the
     # closure-capture note in ChristoffelSymbols).
@@ -352,10 +370,11 @@ end
 # seed covers all four coordinates and we keep the three spatial partials (skip ∂_t).
 function _d_spatial_christoffel(m::AbstractMetric, p::AbstractVector)
     p = SVector{4}(p)
-    Γ_dual = _spatial_christoffel(m, make_dual(p, _DSpatialChristoffelTag))
-    Γ = SArray{Tuple{3,3,3}}(ForwardDiff.value(Γ_dual[a, b, c]) for a in 1:3, b in 1:3, c in 1:3)
+    tag = _ad_tag(_DSpatialChristoffelTag(), m, p)
+    Γ_dual = _spatial_christoffel(m, make_dual(p, tag))
+    Γ = SArray{Tuple{3,3,3}}(_value(tag, Γ_dual[a, b, c]) for a in 1:3, b in 1:3, c in 1:3)
     dΓ = SArray{Tuple{3,3,3,3}}(
-        ForwardDiff.partials(Γ_dual[a, b, c], d + 1) for a in 1:3, b in 1:3, c in 1:3, d in 1:3
+        _partials(tag, Γ_dual[a, b, c], d + 1) for a in 1:3, b in 1:3, c in 1:3, d in 1:3
     )
     # Symmetrize the lower pair (fresh name — closure-capture pitfall).
     dΓs = SArray{Tuple{3,3,3,3}}((dΓ[a, b, c, d] + dΓ[a, c, b, d]) / 2 for a in 1:3, b in 1:3, c in 1:3, d in 1:3)
@@ -812,7 +831,7 @@ Return the gauge-source one-form lowered, `Hl_b = g_{bc} H^c` with
 `H^c = −Γ^c` (see [`gauge_source`](@ref)), and its gradient
 `dHl[a, b] = ∂_a Hl_b`, both at `p`. The gradient is obtained by forward-mode
 differentiation through `g·gauge_source`; the inner `dmetric`/`ChristoffelSymbols`
-already use a distinct dual tag, so this nests cleanly (cf. [`ddmetric`](@ref)).
+create their own, later-ordered dual tag, so this nests cleanly (cf. [`ddmetric`](@ref)).
 These are exactly the two fields the conservative generalized-harmonic source
 needs to carry a prescribed gauge source `H^a`.
 """
@@ -821,10 +840,11 @@ function gauge_source_grad(m::AbstractMetric, p::AbstractVector)
     # Single dual-number seed through Hl_b(q) = g_{bc}(q) H^c(q), the
     # same pattern as `dmetric` (allocation-free; ForwardDiff.jacobian's
     # closure path is not).
-    q = make_dual(p, _DGaugeSourceTag)
+    tag = _ad_tag(_DGaugeSourceTag(), m, p)
+    q = make_dual(p, tag)
     Hd = metric(m, q) * gauge_source(m, q)
-    Hl = SVector{4}(ForwardDiff.value(Hd[b]) for b in 1:4)
-    dHl = SMatrix{4,4}(ForwardDiff.partials(Hd[b], a)
+    Hl = SVector{4}(_value(tag, Hd[b]) for b in 1:4)
+    dHl = SMatrix{4,4}(_partials(tag, Hd[b], a)
                        for a in 1:4, b in 1:4)         # dHl[a, b] = ∂_a Hl_b
     return Hl, dHl
 end
